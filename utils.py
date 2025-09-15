@@ -5,7 +5,7 @@ import json
 import collections.abc
 
 def get_env_variable(var_name, var_type=str):
-    load_dotenv() 
+    load_dotenv(".env.defaults")
     """
     Retrieves an environment variable and raises an error if it's not set.
     Optionally converts the variable to a specified type.
