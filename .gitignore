@@ -1,0 +1,12 @@
+*local_models
+*.venv
+*__pycache__
+*.pytest_cache
+.vscode
+.DS_Store
+*call_audio_logs_dev
+/debug
+*backup
+output_tts.wav
+*generated_audio*
+actions-runner/

@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vexu.ai Call Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 28px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e4e8;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #5a67d8;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: #e53e3e;
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #c53030;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(229, 62, 62, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .status.idle {
+            background: #f0f4f8;
+            color: #718096;
+        }
+
+        .status.connecting {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status.connected {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .audio-indicator {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .audio-indicator.active {
+            display: block;
+        }
+
+        .audio-bars {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 40px;
+            gap: 4px;
+            margin-bottom: 10px;
+        }
+
+        .audio-bar {
+            width: 4px;
+            background: #667eea;
+            border-radius: 2px;
+            transition: height 0.1s;
+        }
+
+        .volume-meter {
+            width: 100%;
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .volume-level {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .error-message {
+            color: #e53e3e;
+            font-size: 14px;
+            margin-top: 10px;
+            text-align: center;
+        }
+        
+        /* New styles for navigation */
+        .nav-buttons {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+            gap: 10px;
+        }
+        
+        .btn-secondary {
+            background: #4a5568;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .btn-secondary:hover {
+            background: #2d3748;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(74, 85, 104, 0.4);
+        }
+        
+        .btn-active {
+            background: #4c51bf;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- New navigation buttons -->
+        <div class="nav-buttons">
+            <a href="/static/index.html" class="btn-secondary btn-active">🎙️ Voice Call</a>
+            <a href="/static/chat.html" class="btn-secondary">💬 Text Chat</a>
+        </div>
+    
+        <h1>🎙️ Vexu.ai Call Test</h1>
+        
+        <div class="form-group">
+            <label for="called">Called Number (To)</label>
+            <input type="text" id="called" value="+12345952496" placeholder="+1234567890">
+        </div>
+        
+        <div class="form-group">
+            <label for="from">From Number</label>
+            <input type="text" id="from" value="+201140099226" placeholder="+1234567890">
+        </div>
+        
+        <div class="button-group">
+            <button id="startCall" class="btn-primary">Start Call</button>
+            <button id="endCall" class="btn-danger" disabled>End Call</button>
+        </div>
+        
+        <div id="status" class="status idle">Ready to make a call</div>
+        
+        <div id="audioIndicator" class="audio-indicator">
+            <div class="audio-bars">
+                <div class="audio-bar" style="height: 10px;"></div>
+                <div class="audio-bar" style="height: 20px;"></div>
+                <div class="audio-bar" style="height: 15px;"></div>
+                <div class="audio-bar" style="height: 25px;"></div>
+                <div class="audio-bar" style="height: 18px;"></div>
+                <div class="audio-bar" style="height: 22px;"></div>
+                <div class="audio-bar" style="height: 12px;"></div>
+            </div>
+            <div>🎤 Speaking...</div>
+            <div class="volume-meter">
+                <div class="volume-level" id="volumeLevel"></div>
+            </div>
+        </div>
+        
+        <div id="errorMessage" class="error-message"></div>
+    </div>
+
+    <script>
+        class CallSimulator {
+            constructor() {
+                this.ws = null;
+                this.audioContext = null;
+                this.mediaStream = null;
+                this.source = null;
+                this.processor = null;
+                this.callSid = null;
+                this.isRecording = false;
+                this.outputBuffer = [];
+                this.isPlaying = false;
+                
+                // Audio playback queue
+                this.audioQueue = [];
+                this.nextPlayTime = 0;
+                this.isProcessingQueue = false;
+                // START MODIFICATION: Add reference to current audio source node
+                this.currentAudioSourceNode = null;
+                // END MODIFICATION
+                
+                this.startBtn = document.getElementById('startCall');
+                this.endBtn = document.getElementById('endCall');
+                this.statusDiv = document.getElementById('status');
+                this.audioIndicator = document.getElementById('audioIndicator');
+                this.volumeLevel = document.getElementById('volumeLevel');
+                this.errorMessage = document.getElementById('errorMessage');
+                
+                this.startBtn.addEventListener('click', () => this.startCall());
+                this.endBtn.addEventListener('click', () => this.endCall());
+                
+                // Animation for audio bars
+                this.animateAudioBars();
+                
+                // Check server health on load
+                this.checkServerHealth();
+            }
+            
+            async checkServerHealth() {
+                try {
+                    const response = await fetch('/api/health');
+                    const health = await response.json();
+                    console.log('Server health:', health);
+                } catch (error) {
+                    console.error('Health check failed:', error);
+                }
+            }
+            
+            animateAudioBars() {
+                setInterval(() => {
+                    if (this.isRecording || this.isPlaying) {
+                        const bars = document.querySelectorAll('.audio-bar');
+                        bars.forEach(bar => {
+                            const height = Math.random() * 30 + 10;
+                            bar.style.height = `${height}px`;
+                        });
+                    }
+                }, 100);
+            }
+            
+            async startCall() {
+                try {
+                    this.setStatus('Initiating call...', 'connecting');
+                    this.errorMessage.textContent = '';
+                    
+                    const called = document.getElementById('called').value;
+                    const fromNumber = document.getElementById('from').value;
+                    
+                    // Initiate the call
+                    const response = await fetch('/api/initiate-call', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ called, from_number: fromNumber })
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || `Failed to initiate call: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    this.callSid = data.call_sid;
+                    
+                    // Initialize audio
+                    await this.initializeAudio();
+                    
+                    // Connect WebSocket
+                    await this.connectWebSocket();
+                    
+                    this.startBtn.disabled = true;
+                    this.endBtn.disabled = false;
+                    
+                } catch (error) {
+                    console.error('Error starting call:', error);
+                    this.errorMessage.textContent = error.message;
+                    this.setStatus('Failed to start call', 'error');
+                }
+            }
+            
+            async initializeAudio() {
+                // Create AudioContext with default sample rate (usually 48000 Hz)
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                console.log(`AudioContext created with sample rate: ${this.audioContext.sampleRate} Hz`);
+                
+                // Get microphone access
+                this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    } 
+                });
+                
+                this.source = this.audioContext.createMediaStreamSource(this.mediaStream);
+                
+                // Create a resampler to convert from native sample rate to 8000 Hz
+                const bufferSize = 4096;
+                this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+                
+                this.processor.onaudioprocess = (e) => {
+                    if (this.isRecording && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        
+                        // Apply a simple noise reduction filter
+                        const filteredData = new Float32Array(inputData.length);
+                        const noiseThreshold = 0.01; // Adjust based on your needs
+                        
+                        for (let i = 0; i < inputData.length; i++) {
+                            // Simple noise gate
+                            if (Math.abs(inputData[i]) < noiseThreshold) {
+                                filteredData[i] = 0;
+                            } else {
+                                filteredData[i] = inputData[i];
+                            }
+                        }
+                        
+                        // Improved resampling to 8000 Hz
+                        const inputSampleRate = this.audioContext.sampleRate;
+                        const outputSampleRate = 8000;
+                        const resampleRatio = outputSampleRate / inputSampleRate;
+                        const outputLength = Math.floor(filteredData.length * resampleRatio);
+                        const resampled = new Float32Array(outputLength);
+                        
+                        for (let i = 0; i < outputLength; i++) {
+                            const inputIndex = i / resampleRatio;
+                            const inputIndexFloor = Math.floor(inputIndex);
+                            
+                            if (inputIndexFloor >= filteredData.length - 1) {
+                                resampled[i] = filteredData[filteredData.length - 1];
+                            } else {
+                                const inputIndexCeil = inputIndexFloor + 1;
+                                const fraction = inputIndex - inputIndexFloor;
+                                
+                                // Linear interpolation
+                                resampled[i] = filteredData[inputIndexFloor] * (1 - fraction) + 
+                                             filteredData[inputIndexCeil] * fraction;
+                            }
+                        }
+                        
+                        // Convert float32 to int16 with proper scaling
+                        const int16Data = new Int16Array(resampled.length);
+                        for (let i = 0; i < resampled.length; i++) {
+                            // Clamp to [-1, 1] and scale to int16 range
+                            const s = Math.max(-1, Math.min(1, resampled[i]));
+                            int16Data[i] = s < 0 ? s * 32768 : s * 32767;
+                        }
+                        
+                        // Calculate volume for visualization (use filtered data)
+                        const volume = Math.sqrt(filteredData.reduce((sum, val) => sum + val * val, 0) / filteredData.length);
+                        this.volumeLevel.style.width = `${Math.min(100, volume * 400)}%`;
+                        
+                        // Convert to base64 and send
+                        const base64Audio = btoa(String.fromCharCode(...new Uint8Array(int16Data.buffer)));
+                        this.ws.send(JSON.stringify({
+                            type: 'audio',
+                            audio: base64Audio
+                        }));
+                    }
+                };
+                
+                this.source.connect(this.processor);
+                this.processor.connect(this.audioContext.destination);
+            }
+            
+            async connectWebSocket() {
+                return new Promise((resolve, reject) => {
+                    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/${this.callSid}`;
+                    this.ws = new WebSocket(wsUrl);
+                    
+                    this.ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        resolve();
+                    };
+                    
+                    this.ws.onmessage = async (event) => {
+                        const data = JSON.parse(event.data);
+                        
+                        if (data.type === 'connected') {
+                            this.setStatus('Call connected - Speak now!', 'connected');
+                            this.isRecording = true;
+                            this.audioIndicator.classList.add('active');
+                            // Reset audio timing for new call
+                            this.nextPlayTime = 0;
+                            this.audioQueue = [];
+                            this.isProcessingQueue = false;
+                            // START MODIFICATION: Clear current audio source node on new connection
+                            this.currentAudioSourceNode = null;
+                            // END MODIFICATION
+                        } else if (data.type === 'audio') {
+                            // Receive and play audio
+                            await this.playAudio(data.audio);
+                        } else if (data.type === 'stop') {
+                            this.endCall();
+                        // START MODIFICATION: Handle clear_audio signal
+                        } else if (data.type === 'clear_audio') {
+                            console.log('Received clear_audio signal. Stopping playback.');
+                            this.clearAudioPlayback();
+                        // END MODIFICATION
+                        } else if (data.type === 'error') {
+                            this.errorMessage.textContent = data.message;
+                            this.setStatus('Error during call', 'error');
+                        }
+                    };
+                    
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        reject(error);
+                    };
+                    
+                    // START MODIFICATION
+                    this.ws.onclose = () => {
+                        console.log('WebSocket closed, ending call.');
+                        this.endCall();
+                    };
+                    // END MODIFICATION
+                });
+            }
+            
+            async playAudio(base64Audio) {
+                try {
+                    // Decode base64 to PCM data
+                    const binaryString = atob(base64Audio);
+                    const len = binaryString.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    
+                    // Convert int16 to float32 with proper scaling
+                    const int16Data = new Int16Array(bytes.buffer);
+                    const float32Data = new Float32Array(int16Data.length);
+                    for (let i = 0; i < int16Data.length; i++) {
+                        // Properly scale int16 to float32 range [-1.0, 1.0]
+                        // Using 32768.0 instead of 0x8000 for clarity and accuracy
+                        float32Data[i] = int16Data[i] / 32768.0;
+                    }
+                    
+                    // Resample from 8000 Hz to AudioContext sample rate using improved algorithm
+                    const inputSampleRate = 8000;
+                    const outputSampleRate = this.audioContext.sampleRate;
+                    const resampleRatio = outputSampleRate / inputSampleRate;
+                    const outputLength = Math.floor(float32Data.length * resampleRatio);
+                    const resampled = new Float32Array(outputLength);
+                    
+                    // Better resampling algorithm with anti-aliasing
+                    for (let i = 0; i < outputLength; i++) {
+                        const inputIndex = i / resampleRatio;
+                        const inputIndexFloor = Math.floor(inputIndex);
+                        
+                        if (inputIndexFloor >= float32Data.length - 1) {
+                            // Handle edge case
+                            resampled[i] = float32Data[float32Data.length - 1];
+                        } else {
+                            const inputIndexCeil = inputIndexFloor + 1;
+                            const fraction = inputIndex - inputIndexFloor;
+                            
+                            // Linear interpolation with bounds checking
+                            resampled[i] = float32Data[inputIndexFloor] * (1 - fraction) + 
+                                         float32Data[inputIndexCeil] * fraction;
+                        }
+                        
+                        // Apply simple low-pass filter to reduce aliasing artifacts
+                        if (i > 0) {
+                            resampled[i] = 0.85 * resampled[i] + 0.15 * resampled[i-1];
+                        }
+                    }
+                    
+                    // Create audio buffer with the proper number of channels
+                    const audioBuffer = this.audioContext.createBuffer(1, resampled.length, outputSampleRate);
+                    audioBuffer.getChannelData(0).set(resampled);
+                    
+                    // Add to queue
+                    this.audioQueue.push(audioBuffer);
+                    console.log(`Audio chunk added to queue. Queue length: ${this.audioQueue.length}, Duration: ${audioBuffer.duration.toFixed(3)}s`);
+                    
+                    // Process queue if not already processing
+                    if (!this.isProcessingQueue) {
+                        this.processAudioQueue();
+                    }
+                    
+                } catch (error) {
+                    console.error('Error decoding audio:', error);
+                }
+            }
+            
+            async processAudioQueue() {
+                if (this.isProcessingQueue || this.audioQueue.length === 0) {
+                    return;
+                }
+                
+                this.isProcessingQueue = true;
+                console.log('Starting audio queue processing...');
+                
+                try {
+                    while (this.audioQueue.length > 0) {
+                        const audioBuffer = this.audioQueue.shift();
+                        
+                        // Create buffer source
+                        const source = this.audioContext.createBufferSource();
+                        source.buffer = audioBuffer;
+                        source.connect(this.audioContext.destination);
+                        // START MODIFICATION: Store reference to the current source node
+                        this.currentAudioSourceNode = source;
+                        // END MODIFICATION
+                        
+                        // Calculate when to play this chunk
+                        const currentTime = this.audioContext.currentTime;
+                        const playTime = Math.max(currentTime, this.nextPlayTime);
+                        
+                        console.log(`Playing audio chunk at ${playTime.toFixed(3)}s (current time: ${currentTime.toFixed(3)}s)`);
+                        
+                        // Update visual indicator
+                        this.isPlaying = true;
+                        
+                        // Schedule the audio
+                        source.start(playTime);
+                        
+                        // Update next play time (add a tiny gap to prevent clicks)
+                        this.nextPlayTime = playTime + audioBuffer.duration + 0.001;
+                        
+                        // Set up end handler
+                        source.onended = () => {
+                            // Check if this was the last chunk
+                            if (this.audioQueue.length === 0 && this.audioContext.currentTime >= this.nextPlayTime - 0.01) {
+                                this.isPlaying = false;
+                                console.log('Audio queue empty, stopping playback');
+                            }
+                            // START MODIFICATION: Clear current audio source node when it ends
+                            if (this.currentAudioSourceNode === source) { // Only clear if it's still the active one
+                                this.currentAudioSourceNode = null;
+                            }
+                            // END MODIFICATION
+                        };
+                        
+                        // Wait a bit before processing next chunk to allow new chunks to arrive
+                        await new Promise(resolve => setTimeout(resolve, 10));
+                    }
+                } catch (error) {
+                    console.error('Error processing audio queue:', error);
+                } finally {
+                    this.isProcessingQueue = false;
+                    
+                    // If there are still items in the queue, restart processing
+                    if (this.audioQueue.length > 0) {
+                        setTimeout(() => this.processAudioQueue(), 50);
+                    }
+                }
+            }
+            
+            // START MODIFICATION: New method to clear audio playback
+            clearAudioPlayback() {
+                if (this.currentAudioSourceNode) {
+                    try {
+                        this.currentAudioSourceNode.stop();
+                        this.currentAudioSourceNode.disconnect();
+                        console.log('Stopped current audio source node.');
+                    } catch (e) {
+                        console.warn('Error stopping audio source node:', e);
+                    } finally {
+                        this.currentAudioSourceNode = null;
+                    }
+                }
+                this.audioQueue = []; // Clear the queue
+                this.nextPlayTime = 0; // Reset playback time
+                this.isProcessingQueue = false; // Stop queue processing
+                this.isPlaying = false; // Update playback status
+                console.log('Audio playback cleared.');
+            }
+            // END MODIFICATION
+
+            endCall() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ type: 'stop' }));
+                    this.ws.close();
+                }
+                
+                this.isRecording = false;
+                this.audioIndicator.classList.remove('active');
+                
+                // Clear audio queue
+                // START MODIFICATION: Use the new clearAudioPlayback method
+                this.clearAudioPlayback();
+                // END MODIFICATION
+                
+                if (this.mediaStream) {
+                    this.mediaStream.getTracks().forEach(track => track.stop());
+                }
+                
+                if (this.source) {
+                    this.source.disconnect();
+                }
+                
+                if (this.processor) {
+                    this.processor.disconnect();
+                }
+                
+                // START MODIFICATION
+                if (this.audioContext && this.audioContext.state !== 'closed') {
+                    this.audioContext.close();
+                }
+                // END MODIFICATION
+                
+                this.startBtn.disabled = false;
+                this.endBtn.disabled = true;
+                this.setStatus('Call ended', 'idle');
+            }
+            
+            setStatus(message, className) {
+                this.statusDiv.textContent = message;
+                this.statusDiv.className = `status ${className}`;
+            }
+        }
+        
+        // Initialize the app
+        const app = new CallSimulator();
+    </script>
+</body>
+</html>
