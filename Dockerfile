@@ -39,6 +39,6 @@ COPY . .
 # Expose the port Uvicorn will run on
 EXPOSE 80
 
-COPY .env .
+COPY .env.defaults .
 # Command to run the application with hot reload
 CMD ["poetry", "run", "python", "orchestrator.py"]
