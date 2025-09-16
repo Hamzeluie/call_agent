@@ -80,16 +80,22 @@ jobs:
       - name: 💣 Kill host process using port ${{ env.PORT }} (if any)
         run: |
           PORT=${{ env.PORT }}
+          echo "📡 Checking for any process on port $PORT..."
           PID=$(lsof -i :$PORT -t) || true
           if [ -n "$PID" ]; then
-            echo "🧨 Port $PORT is held by process PID: $PID"
-            kill -9 $PID 2>/dev/null || echo "⚠️ Failed to kill PID $PID"
-            sleep 2
+            echo "🧨 Found PID $PID using port $PORT. Killing..."
+            kill -9 $PID
+            sleep 3
+            # Verify port is now free
+            if lsof -i :$PORT > /dev/null 2>&1; then
+              echo "❌ Port $PORT is STILL in use after kill. Aborting."
+              exit 1
+            else
+              echo "✅ Port $PORT is now free."
+            fi
           else
-            echo "✅ No host process found on port $PORT"
+            echo "✅ Port $PORT is free."
           fi
-
-
       
       
       - name: Run Docker container
@@ -99,9 +105,8 @@ jobs:
             --gpus all \
             --name orchestrator-server-container \
             --restart unless-stopped \
-            -p "${{ env.PORT }}":8000 \
+            -p ${{ env.PORT }}:8000 \
             orchestrator-server:latest
-      
       
             
       - name: 🧹 Cleanup old Docker images
