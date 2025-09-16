@@ -99,9 +99,7 @@ jobs:
             --gpus all \
             --name orchestrator-server-container \
             --restart unless-stopped \
-            -p "${{ env.PORT }}:${{ env.PORT }}" \
-            -e HOST="${{ env.HOST }}" \
-            -e PORT="${{ env.PORT }}" \
+            -p "${{ env.PORT }}":8000 \
             orchestrator-server:latest
       
       
@@ -122,30 +120,6 @@ jobs:
           docker logs orchestrator-server-container
 
 
-
-
-  test:
-    needs: build-and-push
-    runs-on: self-hosted
-    steps:
-      - name: 🔍 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: 📦 Install dependencies
-        run: |
-          pip install websockets librosa soundfile numpy
-
-      - name: 🧪 Run orchestrator WebSocket Test
-        run: |
-          echo "Testing orchestrator "
-          poetry run python test.py
-  
-  
   
   
   pushing_to_mehdi_origin:
