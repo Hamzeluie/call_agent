@@ -89,7 +89,7 @@ jobs:
           if [ -n "$PIDS" ]; then
           echo "🧨 Found the following PIDs: $PIDS"
           echo "📜 Details:"
-          lsof -i :$PORT
+          sudo lsof -i :$PORT
 
           # Kill them ALL, one by one
           for PID in $PIDS; do
@@ -98,7 +98,7 @@ jobs:
           done
 
           # Final verification
-          if lsof -i :$PORT > /dev/null 2>&1; then
+          if sudo lsof -i :$PORT > /dev/null 2>&1; then
               echo "❌❌❌ EMERGENCY: Port $PORT is STILL in use after multiple kills. Manual intervention required."
               echo "📋 Run this manually on the host:"
               echo "   sudo lsof -i :${{ env.PORT }}"
