@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Make Python 3.10 the default
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
 
+# Make python3.11 default
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3
+
 # Install Poetry
 RUN curl -sSL https://install.python-poetry.org | python3 - && \
     ln -s /root/.local/bin/poetry /usr/local/bin/poetry
