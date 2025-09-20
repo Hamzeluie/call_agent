@@ -41,16 +41,21 @@ class ChatAgent:
         self.response_event = asyncio.Event()  # Add event for synchronization
 
         # Create URIs
-        self.rag_uri = f"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/{self.yaml_config['db']['endpoint']}/search/{self.owner_id}"
+        self.rag_uri = f"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/search/{self.owner_id}"
         self.llm_config_uri = f"http://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/configure"
 
         # Get session ID
         self.session_id = self.get_session_id_sync()
         self.llm_uri = (
-            f"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/{self.yaml_config['llm']['version']}/{self.yaml_config['llm']['endpoint']}/{self.owner_id}/{self.session_id}"
+            f"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/ws/llm/{self.owner_id}/{self.session_id}"
             if self.session_id
             else None
         )
+
+        print(f"RAG URI: {self.rag_uri}")
+        print(f"LLM URI: {self.llm_uri}")
+        print(f"Session ID: {self.session_id}")
+        print(f"llm_config_uri : {self.llm_config_uri}")
 
     def get_session_id_sync(self):
         """Generate session ID synchronously"""
@@ -73,16 +78,27 @@ class ChatAgent:
     async def connect_servers(self):
         """Connect to WebSocket servers"""
         try:
-            headers = {"api-key": self.yaml_config["API_KEY"]}
-            self.websockets["rag"] = await websockets.connect(
-                self.rag_uri, ping_interval=None, extra_headers=headers
-            )
-            if self.session_id:
-                self.websockets["llm"] = await websockets.connect(
-                    self.llm_uri, ping_interval=None
+            try:
+                headers = {"api-key": self.yaml_config["API_KEY"]}
+                self.websockets["rag"] = await websockets.connect(
+                    self.rag_uri, ping_interval=None, extra_headers=headers
                 )
-            else:
-                raise Exception("No session_id available")
+                print("✅ Connected to KB server")
+            except Exception as e:
+                logger.error(f"Failed to connect to RAG server: {e}")
+                raise
+            
+            try:
+                if self.session_id:
+                    self.websockets["llm"] = await websockets.connect(
+                        self.llm_uri, ping_interval=None
+                    )
+                    print("✅ Connected to LLM server")
+                else:
+                    raise Exception("No session_id available")
+            except Exception as e:
+                logger.error(f"Failed to connect to LLM server: {e}")
+                raise
 
             self.connected = True
             logger.info("✅ Connected to servers")

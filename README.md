@@ -60,3 +60,93 @@ with:
 
 
 # Input/Output structure
+there is five microservice used in this repository totally. in this section i introduce input/output structure of each service.
+
+## VAD
+"ws://{self.yaml_config['vad']['host']}:{self.yaml_config['vad']['port']}/ws/vad"
+### Input structure
+
+        {
+                "type": "input_audio_buffer.append", 
+                "audio": audio_b64
+        }
+### Output structure
+
+## TTS
+"ws://{self.yaml_config['stt']['host']}:{self.yaml_config['stt']['port']}/ws/stt"
+### Input structure
+
+        {
+                "type": "audio.append",
+                "sample_rate": integer,
+                "audio": audio_int16,
+        }
+### Output structure
+
+
+## KB
+"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/search/{self.owner_id}"
+### Input structure
+
+        {
+                "query_text": string,
+                "kb_id": integer,
+                "limit": integer,
+        }
+### Output structure
+
+## LLM
+"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/ws/llm/{self.owner_id}/{self.session_id}"
+### Input structure
+
+        {
+                "owner_id": integer,
+                "user_input": string,
+                "retrieved_data": string,
+                "interrupt": boolian,
+        }
+### Output structure
+in starting speech
+
+        {
+                "type": "input_audio_buffer.speech_started"
+        }
+
+in stopping speech
+
+        {
+                "type": "input_audio_buffer.speech_stopped"
+        }
+in speech segment
+
+        {
+                "type": "speech_segment",
+                "audio": segment_b64,
+                "sample_rate": VAD_SAMPLE_RATE
+        }
+OR in ERROR
+
+        {
+                "type": "error", 
+                "message": "Server models not initialized."
+        }
+
+
+## STT
+"ws://{self.yaml_config['tts']['host']}:{self.yaml_config['tts']['port']}"
+### Input structure
+simple text
+
+### Output structure
+
+        {
+                "type": "response.audio.delta",
+                "delta": audio_chunk_b64,
+                "item_id": string,
+        }
+in end of speech
+
+        {
+                "type": "response.done",
+                "item_id": integer,
+        }
