@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from utils import get_env_variable, truncated_json_dumps
 
 # Load YAML configuration first so it can be used in route definitions
-yaml_path = Path(__file__).parents[0] / "config.yaml"
+yaml_path = Path(__file__).parents[0] / "config/config.yaml"
 yaml_config = yaml.safe_load(open(yaml_path, "r"))
 EXPECTED_API_KEY = yaml_config["API_KEY"]  # Set via environment variable
 

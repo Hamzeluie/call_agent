@@ -39,9 +39,8 @@ from utils import get_env_variable
 # import audioop  # Remove this deprecated import
 
 
-yaml_path = Path(__file__).parents[0] / "config.yaml"
+yaml_path = Path(__file__).parents[0] / "config/config.yaml"
 yaml_config = yaml.safe_load(open(yaml_path, "r"))
-
 # Define HOST and PORT from the YAML configuration
 HOST = yaml_config["orchestrator"]["host"]
 PORT = yaml_config["orchestrator"]["port"]
