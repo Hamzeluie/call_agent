@@ -11,3 +11,5 @@ output_tts.wav
 *generated_audio*
 actions-runner/
 test.sh
+local_models/
+llm/local_models/
