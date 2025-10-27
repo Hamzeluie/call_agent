@@ -1,4 +1,4 @@
-API_KEY: "91a64066-74a1-4687-ae2c-122362469cc9"
+API_KEY: "test"
 vad:
   host: "0.0.0.0"
   port: 5001
@@ -8,9 +8,11 @@ stt:
   port: 5002
 llm:
   host: "0.0.0.0"
+  # host: "llm-server"
   port: 5004
 db:
   host: "0.0.0.0"
+  # host: "kb-server"
   port: 5003
 tts:
   host: "0.0.0.0"
@@ -20,6 +22,7 @@ call_development:
 
 orchestrator:
   host: "0.0.0.0"
+  # host: "orchestrator-server"
   port: 8000
   endpoint: "orchestrator"
   chunk_duration: 40

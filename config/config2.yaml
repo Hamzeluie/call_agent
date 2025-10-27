@@ -1,0 +1,33 @@
+API_KEY: "test"
+vad:
+  # host: "0.0.0.0"
+  host: "vad-server"
+  port: 8000
+  sample_rate: 16000
+stt:
+  # host: "0.0.0.0"
+  host: "stt-server"
+  port: 8000
+llm:
+  # host: "0.0.0.0"
+  host: "llm-server"
+  port: 8000
+db:
+  # host: "0.0.0.0"
+  host: "kb-server"
+  port: 8000
+tts:
+  # host: "0.0.0.0"
+  host: "tts-server"
+  port: 8000
+call_development:
+  endpoint: "development"
+
+orchestrator:
+  # host: "0.0.0.0"
+  host: "orchestrator-server"
+  port: 8000
+  endpoint: "orchestrator"
+  chunk_duration: 40
+  sample_rate_ms: 8000
+

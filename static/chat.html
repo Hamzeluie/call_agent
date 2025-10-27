@@ -88,12 +88,12 @@
         const host = window.location.host;
         
         // Primary URL: Use the same scheme and host as the current page
-        const primaryUrl = `${ws_scheme}://${host}/messenger/ws/${userId}/${sessionId}`;
+        const primaryUrl = `${ws_scheme}://${host}/messenger/ws/${sessionId}`;
         
         // Fallback URLs (if needed for specific local setups)
         const fallbackUrls = [
-            `${ws_scheme}://localhost:40331/messenger/ws/${userId}/${sessionId}`,
-            `${ws_scheme}://localhost:6000/messenger/ws/${userId}/${sessionId}`
+            `${ws_scheme}://localhost:40331/messenger/ws/${sessionId}`,
+            `${ws_scheme}://localhost:6000/messenger/ws/${sessionId}`
         ];
         
         return [primaryUrl, ...fallbackUrls];
@@ -144,9 +144,9 @@
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({
-                                user_id: '+12345952496',
-                                agent_id: 'default_agent',
-                                session_id: 'session_' + Date.now()
+                                owner_id: '+12345952496',
+                                agent_id: 'AGENT_ID',
+                                user_id: 'USER_ID'
                             })
                         });
                         

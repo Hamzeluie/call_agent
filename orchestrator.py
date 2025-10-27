@@ -2,42 +2,32 @@ import asyncio
 import audioop
 import base64
 import json
-import os
 import re
-import struct
 import time
 import uuid
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 import numpy as np
 import websockets
 import yaml
-
-# Import routers
-# from production import router as production_router
 from call_development import router as development_router
 from chat_development import router as messages_router
 from dashboard import router as dashboard_router
 from fastapi import FastAPI, HTTPException, Request, WebSocket, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-
-# from monitoring import router as monitoring_router
-# from messenger import router as messages_router
-# Import logging configuration
 from logging_config import get_logger, setup_application_logging
 from pydantic import BaseModel
 
 # Add these imports for audio processing
-from scipy import signal
 from utils import get_env_variable
 
 # import audioop  # Remove this deprecated import
-
 
 yaml_path = Path(__file__).parents[0] / "config.yaml"
 yaml_config = yaml.safe_load(open(yaml_path, "r"))
@@ -52,17 +42,17 @@ DEVELOPMENT_ENDPOINT = get_env_variable("ENDPOINT_DEV")
 MESSAGE_ENDPOINT = get_env_variable("ENDPOINT_MESSAGE")
 
 
-# Call simulator models
 class CallRequest(BaseModel):
-    called: str = "+12345952496"  # owner number
-    from_number: str = "+201140099226"  # user number
+    owner_id: str = "+12345952496"  # owner number
+    user_id: str = "+201140099226"  # user number
+    agent_id: str = "agent_1"
 
 
 class CallSession:
-    def __init__(self, call_sid: str, called: str, from_number: str):
+    def __init__(self, call_sid: str, owner_id: str, user_id: str):
         self.call_sid = call_sid
-        self.called = called
-        self.from_number = from_number
+        self.owner_id = owner_id
+        self.user_id = user_id
         self.stream_sid = str(uuid.uuid4())
         self.twilio_ws = None
         self.client_ws = None
@@ -76,8 +66,9 @@ class CallSession:
 
 
 class MessageRequest(BaseModel):
-    called: str
-    from_number: str
+    owner_id: str
+    user_id: str
+    agent_id: str
 
 
 class MessageResponse(BaseModel):
@@ -196,8 +187,8 @@ async def initiate_call(call_request: CallRequest):
     # Prepare the form data that Twilio would send
     form_data = {
         "CallSid": call_sid,
-        "Called": call_request.called,
-        "From": call_request.from_number,
+        "owner_id": call_request.owner_id,
+        "From": call_request.user_id,
         "CallStatus": "in-progress",
         "Direction": "inbound",
         "AccountSid": f"AC{uuid.uuid4().hex[:32]}",
@@ -270,106 +261,11 @@ async def initiate_call(call_request: CallRequest):
                 ws_url = f"wss://{parsed_url.netloc or urlparse(TWILIO_SERVER_BASE_URL).netloc}/{ws_url}"
 
         # Create call session
-        session = CallSession(call_sid, call_request.called, call_request.from_number)
+        session = CallSession(call_sid, call_request.owner_id, call_request.user_id)
         session.backend_ws_url = ws_url
         active_calls[call_sid] = session
 
         return {"call_sid": call_sid, "ws_url": ws_url, "status": "initiated"}
-
-    except httpx.HTTPError as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to initiate call: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
-@app.post("/api/initiate-message", response_model=MessageResponse)
-async def initiate_message(chat_request: MessageRequest):
-    """Initiate a simulated Twilio message"""
-    chat_sid = f"SM{uuid.uuid4().hex}"
-
-    # Prepare the form data that Twilio would send
-    form_data = {
-        "CallSid": chat_sid,
-        "Called": chat_request.called,
-        "From": chat_request.from_number,
-        "CallStatus": "in-progress",
-        "Direction": "inbound",
-        "AccountSid": f"AC{uuid.uuid4().hex[:32]}",
-    }
-
-    try:
-        # Make the request to the /answer endpoint
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{TWILIO_SERVER_BASE_URL}{MESSAGE_ENDPOINT}/start_message",
-                data=form_data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            response.raise_for_status()
-        print(response.text)        
-        # Parse the TwiML response
-        twiml = response.text.strip()
-        # Remove BOM if present
-        if twiml.startswith("\ufeff"):
-            twiml = twiml[1:]
-
-        try:
-            root = ET.fromstring(twiml)
-        except ET.ParseError as e:
-            # Try to extract XML if there's extra content
-            xml_match = re.search(r"<\?xml.*?</Response>", twiml, re.DOTALL)
-            if xml_match:
-                twiml = xml_match.group(0)
-                root = ET.fromstring(twiml)
-            else:
-                raise HTTPException(
-                    status_code=500, detail=f"Failed to parse TwiML: {str(e)}"
-                )
-
-        # Find the Stream element
-        ws_url = None
-
-        # Look for Stream inside Connect
-        for connect in root.iter():
-            if connect.tag == "Connect" or connect.tag.endswith("}Connect"):
-                for child in connect:
-                    if child.tag == "Stream" or child.tag.endswith("}Stream"):
-                        ws_url = child.get("url") or child.get("URL")
-                        if ws_url:
-                            break
-            if ws_url:
-                break
-
-        # Direct search for Stream element
-        if not ws_url:
-            for elem in root.iter():
-                if elem.tag == "Stream" or elem.tag.endswith("}Stream"):
-                    ws_url = elem.get("url") or elem.get("URL")
-                    if ws_url:
-                        break
-
-        if not ws_url:
-            raise HTTPException(
-                status_code=500, detail="No WebSocket URL found in TwiML response"
-            )
-
-        # Convert relative URL to absolute if needed
-        parsed_url = urlparse(ws_url)
-        if not parsed_url.scheme:
-            if ws_url.startswith("/"):
-                base_parsed = urlparse(TWILIO_SERVER_BASE_URL)
-                ws_url = f"wss://{base_parsed.netloc}{ws_url}"
-            else:
-                ws_url = f"wss://{parsed_url.netloc or urlparse(TWILIO_SERVER_BASE_URL).netloc}/{ws_url}"
-
-        # Create call session
-        session = CallSession(chat_sid, chat_request.called, chat_request.from_number)
-        session.backend_ws_url = ws_url
-        active_calls[chat_sid] = session
-
-        return {"chat_sid": chat_sid, "ws_url": ws_url, "status": "initiated"}
 
     except httpx.HTTPError as e:
         raise HTTPException(
@@ -673,5 +569,5 @@ async def error_test(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(app, host=HOST, port=PORT)
