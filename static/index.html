@@ -229,13 +229,13 @@
         <h1>🎙️ Vexu.ai Call Test</h1>
         
         <div class="form-group">
-            <label for="called">Called Number (To)</label>
-            <input type="text" id="called" value="+12345952496" placeholder="+1234567890">
+            <label for="owner_id">Called Number (To)</label>
+            <input type="text" id="owner_id" value="+12345952496" placeholder="+1234567890">
         </div>
         
         <div class="form-group">
-            <label for="from">From Number</label>
-            <input type="text" id="from" value="+201140099226" placeholder="+1234567890">
+            <label for="user_id">From Number</label>
+            <input type="text" id="user_id" value="+201140099226" placeholder="+1234567890">
         </div>
         
         <div class="button-group">
@@ -329,16 +329,16 @@
                     this.setStatus('Initiating call...', 'connecting');
                     this.errorMessage.textContent = '';
                     
-                    const called = document.getElementById('called').value;
-                    const fromNumber = document.getElementById('from').value;
-                    
+                    const owner_id = document.getElementById('owner_id').value; //called
+                    const user_id = document.getElementById('user_id').value; //fromNumber
+                    const agent_id = "AGENT_1"; // Static agent ID for testing
                     // Initiate the call
                     const response = await fetch('/api/initiate-call', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ called, from_number: fromNumber })
+                        body: JSON.stringify({ owner_id, user_id, agent_id })
                     });
-                    
+                    console.log("****///***", response)
                     if (!response.ok) {
                         const error = await response.json();
                         throw new Error(error.detail || `Failed to initiate call: ${response.statusText}`);
@@ -461,7 +461,7 @@
                     
                     this.ws.onmessage = async (event) => {
                         const data = JSON.parse(event.data);
-                        
+                        console.log('WebSocket message received:', data);
                         if (data.type === 'connected') {
                             this.setStatus('Call connected - Speak now!', 'connected');
                             this.isRecording = true;

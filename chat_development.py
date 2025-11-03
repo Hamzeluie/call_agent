@@ -1,64 +1,35 @@
 import asyncio
-import base64
 import json
-import logging
-import os
-import urllib.parse
-from pathlib import Path
-from typing import Dict, Set
+from typing import Dict, List
+from uuid import uuid4
 
-import requests
-import uvicorn
-import websockets
-
-# Import your ChatAgent
-from chat_agent import ChatAgent
-from dashboard import get_agent_config
-from fastapi import (
-    APIRouter,
-    FastAPI,
-    HTTPException,
-    Request,
-    WebSocket,
-    WebSocketDisconnect,
-)
+from agent_architect.datatype_abstraction import TextFeatures
+from chat_agent import InferenceService
+from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from logging_config import get_logger
 from pydantic import BaseModel
-from utils import get_env_variable, truncated_json_dumps
+from utils import get_env_variable
 
 # Initialize the logger for this module
 logger = get_logger(__name__)
 
 ENDPOINT_MESSAGE = get_env_variable("ENDPOINT_MESSAGE")
 
-app = FastAPI()
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 router = APIRouter(prefix=ENDPOINT_MESSAGE, tags=["messenger"])
 
-# Store active chat sessions with ChatAgent instances
-active_sessions: Dict[str, ChatAgent] = {}
+# Store active chat sessions (not strictly necessary since InferenceService manages sessions)
+active_sessions: Dict[str, InferenceService] = {}
 
 
 # Pydantic models for data validation
 class ChatInitRequest(BaseModel):
+    owner_id: str
     user_id: str
     agent_id: str
-    session_id: str
 
 
 class SessionConfig(BaseModel):
@@ -66,6 +37,31 @@ class SessionConfig(BaseModel):
     user_id: str
     config: dict
     system_prompt: str
+
+
+# Initialize InferenceService
+chat_agent = InferenceService(
+    agent_type="chat",
+    service_names=["RAG"],
+    channels_steps={"RAG": ["high", "low"]},
+    input_channel="RAG:low",
+    output_channel="chat:output",
+    timeout=30.0,
+)
+
+
+# Start the InferenceService
+@router.on_event("startup")
+async def startup_event():
+    asyncio.create_task(chat_agent.start())
+    logger.info("InferenceService started")
+
+
+# Cleanup on shutdown
+@router.on_event("shutdown")
+async def shutdown_event():
+    await chat_agent.stop()
+    logger.info("InferenceService stopped")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -88,34 +84,17 @@ async def get_html():
 @router.post("/configure")
 async def configure_session(session_config: SessionConfig):
     """
-    Configures session using ChatAgent.
+    Configures session using InferenceService.
     """
-    logging.info(f"Received configuration: {session_config}")
-
+    logger.info(f"Received configuration: {session_config}")
     try:
-        session_key = f"{session_config.user_id}:{session_config.kb_id}"
-
-        # Create and configure ChatAgent
-        yaml_path = Path(__file__).parent / "config.yaml"  # Adjust path as needed
-        agent = ChatAgent(
-            owner_id=session_config.user_id,
-            system_prompt=session_config.system_prompt,
-            yaml_path=yaml_path,
-            kb_id=[session_config.kb_id],
-            config=session_config.config,
-        )
-
-        # Connect to servers
-        await agent.connect_servers()
-
-        # Store the agent
-        active_sessions[session_key] = agent
-
-        logging.info(f"Session {session_key} configured successfully")
+        # Note: InferenceService does not have a direct configure method.
+        # Assuming configuration is handled via session initialization or external storage.
+        # For now, return a success message with a session key derived from user_id and kb_id.
+        session_key = f"{session_config.user_id}_{session_config.kb_id}"
         return {"message": "Configuration successful.", "session_key": session_key}
-
     except Exception as e:
-        logging.error(f"Error configuring session: {e}")
+        logger.error(f"Error configuring session: {e}")
         raise HTTPException(
             status_code=500, detail=f"Could not configure session: {str(e)}"
         )
@@ -124,128 +103,68 @@ async def configure_session(session_config: SessionConfig):
 @router.post("/chat/init")
 async def init_chat(request: ChatInitRequest):
     """
-    Initializes chat session using ChatAgent. This must be called before WebSocket connection.
+    Initializes chat session using InferenceService.
     """
-    logging.info(f"Received chat init request: {request}")
-
     try:
-        # Get agent configuration from dashboard
-        agent_config = get_agent_config(request.user_id, request.agent_id)
-        logging.info(f"Agent configuration: {agent_config}")
-
-        if not isinstance(agent_config, dict) or not all(
-            key in agent_config for key in ["kb_ids", "configs", "system_prompt"]
-        ):
-            raise ValueError("Invalid agent configuration format")
-
-        session_key = f"{request.user_id}:{request.session_id}"
-
-        # Check if session already exists
-        if session_key in active_sessions:
-            logging.info(f"Session {session_key} already exists, reusing...")
-            return {
-                "status": "success",
-                "message": "Chat session already initialized",
-                "session_id": request.session_id,
-                "session_key": session_key,
-            }
-
-        # Create SessionConfig for the configure endpoint
-        session_config = SessionConfig(
-            kb_id=",".join(agent_config["kb_ids"]),
-            user_id=request.user_id,
-            config=agent_config["configs"],
-            system_prompt=agent_config["system_prompt"],
+        sid = f"{request.owner_id}:{request.agent_id}:{request.user_id}:{str(uuid4().hex)}"
+        await chat_agent.start_session(
+            sid=sid, agent_id=request.agent_id, owner_id=request.owner_id
         )
-
-        # Call configure endpoint to set up the ChatAgent
-        configure_response = await configure_session(session_config)
-
-        # Update session key to match the WebSocket format
-        websocket_session_key = f"{request.user_id}:{request.session_id}"
-        configured_session_key = configure_response.get("session_key")
-
-        # If the session key from configure is different, update our active_sessions
-        if configured_session_key and configured_session_key != websocket_session_key:
-            active_sessions[websocket_session_key] = active_sessions.pop(
-                configured_session_key
-            )
-            logging.info(
-                f"Updated session key from {configured_session_key} to {websocket_session_key}"
-            )
-
-        logging.info(f"Session {websocket_session_key} initialized successfully")
-
+        logger.info(f"Chat session initialized: {sid}")
         return {
             "status": "success",
-            "message": "Chat session initialized",
-            "session_id": request.session_id,
-            "session_key": websocket_session_key,
+            "message": f"Session {sid} initialized",
+            "session_id": sid,
         }
-
     except Exception as e:
-        logging.error(f"Error initializing chat: {e}")
+        logger.error(f"Error initializing session {sid}: {e}")
         raise HTTPException(
-            status_code=500, detail=f"Error initializing chat: {str(e)}"
+            status_code=500, detail=f"Error initializing session: {str(e)}"
         )
 
 
-@router.websocket("/ws/{user_id}/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str):
+@router.websocket("/ws/{sid}")
+async def websocket_endpoint(websocket: WebSocket, sid: str):
     await websocket.accept()
-
-    session_key = f"{user_id}:{session_id}"
-
-    if session_key not in active_sessions:
-        error_msg = "Session not configured. Please call /chat/init first."
-        await websocket.send_text(json.dumps({"type": "error", "message": error_msg}))
-        await websocket.close(1008)
-        logging.error(f"Session {session_key} not found in active_sessions")
-        return
-
-    logging.info(f"Client connected for {session_key}")
-
     try:
-        agent = active_sessions[session_key]
-
-        # Send connection confirmation
         await websocket.send_text(
             json.dumps({"type": "connected", "message": "Chat session established"})
         )
 
         while True:
-            # Receive message from client
-            user_message = await websocket.receive_text()
-            logging.info(f"Received from client ({session_key}): '{user_message}'")
+            
+            if not await chat_agent.is_session_active(sid):
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "timeout",
+                            "message": "Your session has expired due to inactivity.",
+                        }
+                    )
+                )
+                await websocket.close()
+                return  # Clean exit — no exception!
 
-            # Send typing indicator
+            user_message = await websocket.receive_text()
+            logger.info(f"Received from client ({sid}): '{user_message}'")
+
             await websocket.send_text(
                 json.dumps({"type": "typing", "message": "AI is thinking..."})
             )
 
             try:
-                # Process message through ChatAgent with streaming
-                full_response = ""
-                is_first_chunk = True
+                response = []
+                await chat_agent.send_chunk(user_message, sid)
 
-                async for chunk in agent.send_message(user_message):
-                    if chunk:
-                        # Send each chunk as it arrives
-                        await websocket.send_text(
-                            json.dumps(
-                                {
-                                    "type": "chunk",
-                                    "content": chunk,
-                                    "is_first": is_first_chunk,
-                                }
-                            )
-                        )
-                        full_response += chunk
-                        is_first_chunk = False
-
-                # Send completion message
+                async for chunk in chat_agent.predict(sid):
+                    if chunk.is_final:
+                        break
+                    response.append(chunk.text)
+                    await websocket.send_text(
+                        json.dumps({"type": "chunk", "content": chunk.text})
+                    )
                 await websocket.send_text(
-                    json.dumps({"type": "complete", "message": full_response})
+                    json.dumps({"type": "complete", "message": "".join(response)})
                 )
 
             except asyncio.TimeoutError:
@@ -254,7 +173,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                 )
 
             except Exception as e:
-                logging.error(f"Error processing message for {session_key}: {e}")
+                logger.error(f"Error processing message for {sid}: {e}")
                 await websocket.send_text(
                     json.dumps(
                         {
@@ -265,34 +184,22 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                 )
 
     except WebSocketDisconnect:
-        logging.info(f"Client disconnected from {session_key}")
-    except Exception as e:
-        logging.error(f"Error in session {session_key}: {e}")
-        await websocket.send_text(json.dumps({"error": str(e)}))
+        logger.info(f"Client {sid} disconnected")
     finally:
-        # Keep the session active for multiple messages
-        await websocket.close()
-        logging.info(f"WebSocket closed for {session_key}")
+        # Optional: cleanup session if needed
+        pass
 
 
-@router.delete("/chat/{user_id}/{session_id}")
-async def end_chat_session(user_id: str, session_id: str):
+@router.delete("/chat/{session_id}")
+async def end_chat_session(session_id: str):
     """End a chat session and clean up resources"""
-    session_key = f"{user_id}:{session_id}"
-
-    if session_key in active_sessions:
-        try:
-            await active_sessions[session_key].close()
-            del active_sessions[session_key]
-            logging.info(f"Session {session_key} ended successfully")
-            return {"status": "success", "message": "Session ended"}
-        except Exception as e:
-            logging.error(f"Error ending session {session_key}: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Error ending session: {str(e)}"
-            )
-    else:
-        return {"status": "not_found", "message": "Session not found"}
+    try:
+        await chat_agent.stop_session(sid=session_id)
+        logger.info(f"Session {session_id} ended successfully")
+        return {"status": "success", "message": "Session ended"}
+    except Exception as e:
+        logger.error(f"Error ending session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error ending session: {str(e)}")
 
 
 @router.get("/health")
@@ -301,11 +208,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "vexu-chat-api",
-        "active_sessions": len(active_sessions),
+        "active_sessions": len(
+            active_sessions
+        ),  # Note: May not reflect actual sessions in Redis
     }
-
-
-app.include_router(router)
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=5100)

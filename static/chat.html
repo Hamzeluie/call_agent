@@ -58,6 +58,12 @@
                     <div class="typing-indicator"></div>
                 </div>
             </div>
+            <button
+                id="reconnect-button"
+                class="hidden mt-4 w-full bg-yellow-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-yellow-600 transition-colors duration-200"
+            >
+                Start New Session
+            </button>
         </div>
     </div>
     <script>
@@ -67,20 +73,22 @@
         const responseBox = document.getElementById('response-box');
         const submitButton = document.getElementById('submit-button');
         const typingIndicator = document.getElementById('typing-indicator');
+        const reconnectButton = document.getElementById('reconnect-button');
         let ws = null;
         let sessionInitialized = false;
         let sessionId = null;
         let isStreaming = false;
         let currentResponse = '';
 
-        // Try different WebSocket URLs if the primary fails
-        const getWebSocketUrls = (userId, sessionId) => {
-            const baseUrls = [
-                `wss://${window.location.host}/messenger/ws/${userId}/${sessionId}`,
-                `wss://${window.location.hostname}:40331/messenger/ws/${userId}/${sessionId}`,
-                `wss://${window.location.hostname}:6000/messenger/ws/${userId}/${sessionId}`
+        const getWebSocketUrls = (sessionId) => {
+            const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
+            const host = window.location.host;
+            const primaryUrl = `${ws_scheme}://${host}/messenger/ws/${sessionId}`;
+            const fallbackUrls = [
+                `${ws_scheme}://localhost:40331/messenger/ws/${sessionId}`,
+                `${ws_scheme}://localhost:6000/messenger/ws/${sessionId}`
             ];
-            return baseUrls;
+            return [primaryUrl, ...fallbackUrls];
         };
 
         function showTypingIndicator() {
@@ -95,7 +103,6 @@
         function appendToResponse(text) {
             currentResponse += text;
             responseText.textContent = currentResponse;
-            // Auto-scroll to bottom
             responseBox.scrollTop = responseBox.scrollHeight;
         }
 
@@ -108,31 +115,22 @@
             console.log('Starting session initialization...');
             try {
                 responseText.textContent = 'Initializing session...';
-                
-                // Try multiple endpoints for session initialization
-                const endpoints = [
-                    '/messenger/chat/init',
-                    'http://localhost:40331/messenger/chat/init'
-                ];
-                
+                const endpoints = [`${window.location.origin}/messenger/chat/init`, 'http://localhost:40331/messenger/chat/init'];
                 let initResponse = null;
                 let lastError = null;
-                
+
                 for (const endpoint of endpoints) {
                     try {
                         console.log(`Trying endpoint: ${endpoint}`);
                         const response = await fetch(endpoint, {
                             method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                user_id: '+12345952496',
-                                agent_id: 'default_agent',
-                                session_id: 'session_' + Date.now()
+                                owner_id: '+12345952496',
+                                agent_id: 'AGENT_ID',
+                                user_id: 'USER_ID'
                             })
                         });
-                        
                         if (response.ok) {
                             initResponse = await response.json();
                             break;
@@ -142,17 +140,14 @@
                         console.log(`Endpoint ${endpoint} failed:`, error);
                     }
                 }
-                
+
                 if (!initResponse) {
                     throw new Error(lastError?.message || 'All initialization endpoints failed');
                 }
-                
-                console.log('Session init response:', initResponse);
-                
+
                 if (initResponse.status === 'success') {
                     sessionInitialized = true;
                     sessionId = initResponse.session_id;
-                    console.log('Calling connectWebSocket with session_id:', sessionId);
                     connectWebSocket(sessionId);
                 } else {
                     throw new Error(initResponse.message || 'Failed to initialize session');
@@ -161,8 +156,6 @@
                 console.error('Failed to initialize session:', error);
                 responseText.textContent = `Error: ${error.message}`;
                 submitButton.disabled = true;
-                
-                // Show demo mode option
                 if (confirm('Server connection failed. Would you like to use demo mode?')) {
                     enableDemoMode();
                 }
@@ -171,62 +164,61 @@
 
         function connectWebSocket(sessionId) {
             if (!sessionId) {
-                console.error('No session ID provided for WebSocket connection');
                 responseText.textContent = 'Error: No session ID available';
                 return;
             }
-            
-            const userId = '+12345952496';
-            const wsUrls = getWebSocketUrls(userId, sessionId);
+
+            const wsUrls = getWebSocketUrls(sessionId);
             let currentUrlIndex = 0;
-            
+
             const tryNextWebSocket = () => {
                 if (currentUrlIndex >= wsUrls.length) {
-                    console.error('All WebSocket URLs failed');
                     responseText.textContent = 'Error: Could not connect to any WebSocket server';
                     submitButton.disabled = true;
                     return;
                 }
-                
+
                 const wsUrl = wsUrls[currentUrlIndex];
                 console.log('Attempting WebSocket connection to:', wsUrl);
-                
+
                 ws = new WebSocket(wsUrl);
-                
+
                 ws.onopen = () => {
                     console.log('WebSocket connection established.');
                     responseText.textContent = 'Connected! You can now send messages.';
                     submitButton.disabled = false;
+                    reconnectButton.classList.add('hidden');
                 };
-                
+
                 ws.onmessage = (event) => {
                     console.log('Received message:', event.data);
                     try {
                         const data = JSON.parse(event.data);
-                        
-                        switch(data.type) {
+                        switch (data.type) {
                             case 'connected':
                                 responseText.textContent = data.message;
                                 break;
-                                
                             case 'typing':
                                 showTypingIndicator();
                                 responseText.textContent = data.message;
                                 break;
-                                
                             case 'chunk':
                                 hideTypingIndicator();
-                                // Extract and display only the content
                                 appendToResponse(data.content);
                                 break;
-                                
                             case 'complete':
                                 hideTypingIndicator();
                                 submitButton.disabled = false;
                                 submitButton.textContent = 'Send to Orchestrator';
                                 isStreaming = false;
                                 break;
-                                
+                            case 'timeout':
+                                hideTypingIndicator();
+                                responseText.textContent = `⚠️ ${data.message}`;
+                                submitButton.disabled = true;
+                                isStreaming = false;
+                                reconnectButton.classList.remove('hidden');
+                                break;
                             case 'error':
                                 hideTypingIndicator();
                                 responseText.textContent = `Error: ${data.message}`;
@@ -234,7 +226,6 @@
                                 submitButton.textContent = 'Send to Orchestrator';
                                 isStreaming = false;
                                 break;
-                                
                             default:
                                 responseText.textContent = typeof data === 'string' ? data : JSON.stringify(data);
                         }
@@ -243,50 +234,86 @@
                         responseText.textContent = event.data;
                     }
                 };
-                
+
                 ws.onclose = () => {
                     console.log('WebSocket connection closed.');
-                    responseText.textContent = 'Connection closed. Attempting to reconnect...';
+                    responseText.textContent = 'Connection closed.';
                     submitButton.disabled = true;
                     isStreaming = false;
-                    
-                    // Try the next URL after a delay
-                    currentUrlIndex++;
-                    setTimeout(() => tryNextWebSocket(), 3000);
                 };
-                
+
                 ws.onerror = (error) => {
-                    console.error('WebSocket error for URL:', wsUrl, error);
+                    console.error('WebSocket error:', error);
                     ws.close();
                 };
             };
-            
+
             tryNextWebSocket();
         }
 
-        // Demo mode for testing without a backend
+        reconnectButton.addEventListener('click', async () => {
+            resetResponse();
+            responseText.textContent = 'Starting new session...';
+            reconnectButton.classList.add('hidden');
+            submitButton.disabled = true;
+
+            if (ws) {
+                ws.close();
+            }
+
+            try {
+                const endpoints = [`${window.location.origin}/messenger/chat/init`, 'http://localhost:40331/messenger/chat/init'];
+                let initResponse = null;
+                let lastError = null;
+
+                for (const endpoint of endpoints) {
+                    try {
+                        const response = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                owner_id: '+12345952496',
+                                agent_id: 'AGENT_ID',
+                                user_id: 'USER_ID'
+                            })
+                        });
+                        if (response.ok) {
+                            initResponse = await response.json();
+                            break;
+                        }
+                    } catch (error) {
+                        lastError = error;
+                    }
+                }
+
+                if (!initResponse || initResponse.status !== 'success') {
+                    throw new Error(initResponse?.message || 'Failed to initialize new session');
+                }
+
+                sessionInitialized = true;
+                sessionId = initResponse.session_id;
+                connectWebSocket(sessionId);
+            } catch (error) {
+                console.error('Reconnect failed:', error);
+                responseText.textContent = `Reconnect failed: ${error.message}`;
+                reconnectButton.classList.remove('hidden');
+            }
+        });
+
         function enableDemoMode() {
             sessionInitialized = true;
             responseText.textContent = 'Demo mode activated. Messages will be echoed back.';
             submitButton.disabled = false;
-            
             form.addEventListener('submit', (event) => {
                 event.preventDefault();
                 const userMessage = messageInput.value;
-                if (!userMessage.trim()) {
-                    alert('Please enter a message');
-                    return;
-                }
-                
+                if (!userMessage.trim()) return alert('Please enter a message');
                 resetResponse();
                 showTypingIndicator();
                 submitButton.disabled = true;
                 isStreaming = true;
-                
-                // Simulate streaming response
                 const demoResponse = `This is a demo response to: "${userMessage}". The LLM would generate this text in real-time.`;
                 let currentIndex = 0;
-                
                 const streamInterval = setInterval(() => {
                     if (currentIndex < demoResponse.length) {
                         appendToResponse(demoResponse[currentIndex]);
@@ -298,43 +325,29 @@
                         isStreaming = false;
                     }
                 }, 50);
-                
                 messageInput.value = '';
             });
         }
 
-        // Form handler for WebSocket mode
         const originalFormHandler = (event) => {
             event.preventDefault();
             if (!sessionInitialized || !ws || ws.readyState !== WebSocket.OPEN) {
                 responseText.textContent = 'Session not ready. Please wait...';
                 return;
             }
-            
             const userMessage = messageInput.value;
-            if (!userMessage.trim()) {
-                alert('Please enter a message');
-                return;
-            }
-            
-            if (isStreaming) {
-                alert('Please wait for the current response to complete');
-                return;
-            }
-            
+            if (!userMessage.trim()) return alert('Please enter a message');
+            if (isStreaming) return alert('Please wait for the current response to complete');
             resetResponse();
             showTypingIndicator();
             submitButton.disabled = true;
             submitButton.textContent = 'Sending...';
             isStreaming = true;
-            
             ws.send(userMessage);
             messageInput.value = '';
         };
 
         form.addEventListener('submit', originalFormHandler);
-
-        // Start initialization
         initializeSession();
     </script>
 </body>

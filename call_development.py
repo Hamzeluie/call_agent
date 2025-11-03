@@ -3,8 +3,6 @@ import audioop
 import base64
 import json
 
-# NEW: Imports for audio logging
-
 # from faster_whisper import WhisperModel # REMOVED
 import urllib.parse
 import uuid
@@ -26,6 +24,8 @@ from utils import (  # Ensure truncated_json_dumps is available in utils
     truncated_json_dumps,
 )
 
+# NEW: Imports for audio logging
+
 
 # Initialize the logger for this module
 logger = get_logger(__name__)  # e.g., 'call_agent_vexu.development'
@@ -40,12 +40,16 @@ DEVICE_DEV = get_env_variable(
 )  # Keep DEVICE_DEV if used for VAD parameters
 SHOW_TIMING_MATH_DEV = get_env_variable("SHOW_TIMING_MATH_DEV", var_type=bool)
 
+VEXU_API_BASE_URL_DEV = get_env_variable("VEXU_API_BASE_URL_DEV")
+VEXU_API_TOKEN_DEV = get_env_variable("VEXU_API_TOKEN_DEV")
+VEXU_CALLER_NAME_CONSTANT_DEV = get_env_variable("VEXU_CALLER_NAME_CONSTANT_DEV")
+
 OPENAI_API_KEY_DEV = get_env_variable(
     "OPENAI_API_KEY_DEV"
 )  # Kept for general OpenAI API usage if any, but not for local Realtime WS
 SYSTEM_MESSAGE_TEMPLATE_DEV = get_env_variable("SYSTEM_MESSAGE_TEMPLATE_DEV")
 
-
+VEXU_USERS_API_BASE_URL_DEV = get_env_variable("VEXU_USERS_API_BASE_URL_DEV")
 VOICE_DEV = get_env_variable("VOICE_DEV")
 
 OPENAI_API_BASE_URL_DEV = get_env_variable("OPENAI_API_BASE_URL_DEV")
@@ -100,6 +104,27 @@ vad_parameters = {
     # "max_speech_duration_s": float("inf") # Maximum duration of a speech segment in seconds
 }
 
+# REMOVED WHISPER MODEL INITIALIZATION AND WARMUP
+# STT_MODEL = WhisperModel(WHISPER_MODEL_DEV, device=DEVICE_DEV, compute_type=WHISPER_QUANTIZE_DEV)
+# logger.info("Warming up the Whisper model (DEV)...")
+# for i in range(3):
+#     warmup_start_time = time.time()
+#     segments, info = STT_MODEL.transcribe("./arabic-warmup-audio.wav", beam_size=WHISPER_BEAM_DEV, language=['ar', 'en'], vad_filter=True, vad_parameters=vad_parameters)
+#     warmup_end_time = time.time()
+#     logger.info(f"Whisper model warmup iteration {i+1} (DEV) took {warmup_end_time - warmup_start_time:.2f} seconds.")
+# logger.info("Whisper model (DEV) warmed up.")
+# logger.info(
+#     "Whisper warmup (DEV): Detected language '%s' with probability %f",
+#     info.language,
+#     info.language_probability,
+#     extra={"language": info.language, "probability": float(f"{info.language_probability:.4f}")}
+# )
+# for segment_idx, segment in enumerate(segments):
+#     logger.debug(
+#         "Whisper warmup (DEV) segment %d: [%.2fs -> %.2fs] %s",
+#         segment_idx, segment.start, segment.end, segment.text,
+#         extra={"segment_start_s": segment.start, "segment_end_s": segment.end}
+#     )
 
 LOG_EVENT_TYPES = [
     "error",
@@ -213,6 +238,968 @@ class CallAudioLogger:
 # --- End NEW: Audio Logging Configuration and Class ---
 
 
+async def get_vexu_user_details(phone_number: str):
+    """Fetches user details (name and user_id) from Vexu Users API."""
+    if not phone_number:
+        logger.warning(
+            "Vexu Users API (DEV): Cannot fetch user details, phone_number is missing."
+        )
+        return None
+
+    headers = {"accept": "application/json", "X-AI-Service-Token": VEXU_API_TOKEN_DEV}
+
+    encoded_phone_number = urllib.parse.quote(phone_number)
+    url = f"{VEXU_USERS_API_BASE_URL_DEV}{encoded_phone_number}"
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    logger.debug(
+        "Vexu Users API (DEV): Attempting to fetch user details.",
+        extra={
+            "url": url,
+            "phone_number_encoded": encoded_phone_number,
+            "phone_number_raw": phone_number,
+        },
+    )
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.get(url, headers=headers) as response:
+                print("SESSION::", url, response.status)
+                if response.status == 200:
+                    user_data = await response.json()
+                    logger.info(
+                        "Vexu Users API (DEV): Successfully fetched user details.",
+                        extra={
+                            "phone_number": phone_number,
+                            "user_data_preview": truncated_json_dumps(
+                                user_data, max_string_len=150
+                            ),
+                        },
+                    )
+                    if (
+                        "name" in user_data
+                        and user_data["name"]
+                        and "user_id" in user_data
+                        and user_data["user_id"]
+                    ):
+                        return {
+                            "name": user_data["name"],
+                            "user_id": user_data["user_id"],
+                        }
+                    else:
+                        logger.warning(
+                            f"Vexu Users API (DEV): User data for {phone_number} is incomplete (missing name or user_id).",
+                            extra={
+                                "phone_number": phone_number,
+                                "user_data_received": truncated_json_dumps(user_data),
+                            },
+                        )
+                        return None
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        f"Vexu Users API (DEV): Error fetching user details for {phone_number}.",
+                        extra={
+                            "phone_number": phone_number,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "url": url,
+                        },
+                    )
+                    return None
+        except Exception as e:
+            logger.error(
+                f"Vexu Users API (DEV): Exception during request for {phone_number}.",
+                exc_info=True,
+                extra={"phone_number": phone_number, "url": url},
+            )
+            return None
+
+
+async def post_to_vexu_api(endpoint: str, vexu_call_id: str = None, data: dict = None):
+    headers = {
+        "X-AI-Service-Token": VEXU_API_TOKEN_DEV,
+        "Content-Type": "application/json",
+    }
+    if vexu_call_id:
+        headers["call_id"] = vexu_call_id
+
+    url = f"{VEXU_API_BASE_URL_DEV}{endpoint}"
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    # Define log_extra_vexu_api for this scope
+    log_extra_vexu_api = {
+        "endpoint": endpoint,
+        "vexu_call_id": vexu_call_id,
+        "url": url,
+    }
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            url, headers=headers, json=data if data is not None else {}
+        ) as response:
+            if response.status >= 200 and response.status < 300:
+                logger.info(
+                    f"Vexu AI (DEV): Successfully posted to endpoint '{endpoint}'.",
+                    extra={**log_extra_vexu_api, "status_code": response.status},
+                )
+                try:
+                    response_data = await response.json()
+                    logger.debug(
+                        "Vexu AI (DEV): Response data from POST.",
+                        extra={
+                            **log_extra_vexu_api,
+                            "response_data_preview": truncated_json_dumps(
+                                response_data, max_string_len=150
+                            ),
+                        },
+                    )
+                    return response_data
+                except aiohttp.ContentTypeError:
+                    response_data = await response.text()
+                    logger.warning(
+                        f"Vexu AI (DEV): Response from POST to endpoint '{endpoint}' not JSON.",
+                        extra={
+                            **log_extra_vexu_api,
+                            "response_body_preview": response_data[:300],
+                        },
+                    )
+                    return response_data
+            else:
+                error_text = await response.text()
+                logger.error(
+                    f"Vexu AI (DEV): Error posting to endpoint '{endpoint}'.",
+                    extra={
+                        **log_extra_vexu_api,
+                        "status_code": response.status,
+                        "response_text_preview": error_text[:300],
+                        "request_payload_preview": truncated_json_dumps(
+                            data, max_string_len=150
+                        ),
+                    },
+                )
+                return None
+
+
+async def post_vexu_start_call(
+    twilio_call_sid: str, caller_phone: str, dynamic_vexu_user_id: str
+):
+    log_context = {
+        "twilio_call_sid": twilio_call_sid,
+        "caller_phone": caller_phone,
+        "dynamic_vexu_user_id": dynamic_vexu_user_id,
+    }
+    if not dynamic_vexu_user_id:
+        logger.critical(
+            "CRITICAL ERROR: dynamic_vexu_user_id is missing for post_vexu_start_call (DEV).",
+            extra=log_context,
+        )
+        return None
+
+    vexu_call_id_generated = str(uuid.uuid4())
+    start_time_iso = (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+    payload = {
+        "user_id": dynamic_vexu_user_id,
+        "call_sid": vexu_call_id_generated,
+        "contact_id": None,
+        "caller_name": None,
+        "caller_phone": caller_phone if caller_phone else "Unknown",
+        "start_time": start_time_iso,
+        "end_time": start_time_iso,
+        "duration": 1,
+        "transcript": "",
+        "audio_base64": "",
+        "summary": "",
+        "is_encrypted": False,
+        "is_emergency": False,  # Initialize as False
+    }
+    logger.info(
+        f"Posting start call to Vexu AI (DEV). Vexu Call ID in payload: {vexu_call_id_generated}.",
+        extra={**log_context, "vexu_call_id_generated": vexu_call_id_generated},
+    )
+    logger.debug(
+        "Vexu start call payload (DEV):",
+        extra={**log_context, "payload": truncated_json_dumps(payload)},
+    )
+
+    response_data = await post_to_vexu_api("", data=payload)
+
+    if (
+        response_data
+        and isinstance(response_data, dict)
+        and "id" in response_data
+        and response_data["id"]
+    ):
+        vexu_call_id_from_response = response_data["id"]
+        caller_name_from_response = response_data.get("caller_name")
+        logger.info(
+            f"Vexu Call created (DEV). API responded with ID: {vexu_call_id_from_response}.",
+            extra={
+                **log_context,
+                "vexu_call_id_from_response": vexu_call_id_from_response,
+                "caller_name_from_response": caller_name_from_response,
+            },
+        )
+        return {
+            "vexu_call_id": vexu_call_id_from_response,
+            "caller_name": caller_name_from_response,
+        }
+    else:
+        logger.error(
+            "Error: Failed to get 'id' from Vexu AI post_call response or 'id' is empty (DEV).",
+            extra={
+                **log_context,
+                "response_data_preview": truncated_json_dumps(
+                    response_data, max_string_len=150
+                ),
+            },
+        )
+        return None
+
+
+async def post_vexu_message_async(
+    vexu_call_id: str,
+    text: str,
+    sender: str = "caller",
+    audio_pcm16_8khz_bytes: bytes = None,
+):
+    log_context = {
+        "vexu_call_id": vexu_call_id,
+        "sender": sender,
+        "text_preview": text[:50],
+    }
+    if not vexu_call_id:
+        logger.warning(
+            "Vexu AI (DEV): Cannot post message, Vexu Call ID is missing.",
+            extra=log_context,
+        )
+        return
+    current_time = datetime.now(timezone.utc)
+    if sender == "agent":
+        current_time += timedelta(milliseconds=500)
+    timestamp_iso = current_time.isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+    audio_base64_payload = ""
+    if audio_pcm16_8khz_bytes:
+        try:
+            if len(audio_pcm16_8khz_bytes) > 0:
+                audio_base64_payload = base64.b64encode(audio_pcm16_8khz_bytes).decode(
+                    "utf-8"
+                )
+            else:
+                logger.debug(
+                    "Vexu AI (DEV): Received empty audio bytes, sending empty audio payload for message.",
+                    extra=log_context,
+                )
+        except Exception as e:
+            logger.error(
+                "Vexu AI (DEV): Error base64 encoding audio for message.",
+                exc_info=True,
+                extra=log_context,
+            )
+
+    payload = {
+        "sender": sender,
+        "text": text,
+        "timestamp": timestamp_iso,
+        "message_type": "regular",
+        "audio_base64": audio_base64_payload,
+        "is_encrypted": False,
+    }
+    endpoint = f"/{vexu_call_id}/messages"
+    asyncio.create_task(
+        post_to_vexu_api(endpoint, vexu_call_id=vexu_call_id, data=payload)
+    )
+
+
+async def post_vexu_end_call(vexu_call_id: str):
+    log_context = {"vexu_call_id": vexu_call_id}
+    if not vexu_call_id:
+        logger.warning(
+            "Vexu AI (DEV): Cannot post end call, Vexu Call ID is missing.",
+            extra=log_context,
+        )
+        return
+    endpoint = f"/{vexu_call_id}/end"
+    logger.info("Vexu AI (DEV): Posting end call.", extra=log_context)
+    await post_to_vexu_api(endpoint, vexu_call_id=vexu_call_id, data={})
+
+
+async def get_openai_summary(
+    conversation_text: str, call_sid: Optional[str] = "N/A"
+) -> Optional[str]:
+    log_context = {"twilio_call_sid_for_summary": call_sid}
+    if not conversation_text:
+        logger.info(
+            "OpenAI Summary (DEV): No conversation text provided.", extra=log_context
+        )
+        return None
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENAI_API_KEY_DEV}",
+    }
+
+    data = {
+        "model": OPENAI_SUMMARY_MODEL_DEV,
+        "messages": [
+            # {"role": "system", "content": "You are a helpful assistant designed to summarize call transcripts."},
+            {
+                "role": "user",
+                "content": OPENAI_SUMMARY_PROMPT_TEMPLATE_DEV.format(
+                    conversation_text=conversation_text
+                ),
+            }
+        ],
+        "temperature": OPENAI_SUMMARY_TEMPERATURE_DEV,
+    }
+    url = f"{OPENAI_API_BASE_URL_DEV}/chat/completions"
+    timeout = aiohttp.ClientTimeout(total=30)
+
+    logger.info(
+        "OpenAI Summary (DEV): Requesting summary.",
+        extra={**log_context, "model": OPENAI_SUMMARY_MODEL_DEV, "url": url},
+    )
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.post(url, headers=headers, json=data) as response:
+                if response.status == 200:
+                    summary_response = await response.json()
+                    if (
+                        summary_response.get("choices")
+                        and len(summary_response["choices"]) > 0
+                    ):
+                        message_content = (
+                            summary_response["choices"][0]
+                            .get("message", {})
+                            .get("content")
+                        )
+                        if message_content:
+                            logger.info(
+                                "OpenAI Summary (DEV): Successfully received summary.",
+                                extra={
+                                    **log_context,
+                                    "summary_preview": message_content[:100],
+                                },
+                            )
+                            return message_content.strip()
+                        else:
+                            logger.warning(
+                                "OpenAI Summary (DEV): 'content' field missing in choice's message.",
+                                extra=log_context,
+                            )
+                            logger.debug(
+                                "OpenAI Summary (DEV): Faulty choice object details.",
+                                extra={
+                                    **log_context,
+                                    "faulty_choice_object": truncated_json_dumps(
+                                        summary_response.get("choices", [{}])[0]
+                                    ),
+                                },
+                            )
+                            return None
+                    else:
+                        logger.warning(
+                            "OpenAI Summary (DEV): 'choices' field missing or empty in API response.",
+                            extra={
+                                **log_context,
+                                "api_response_preview": truncated_json_dumps(
+                                    summary_response, max_string_len=150
+                                ),
+                            },
+                        )
+                        return None
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        "OpenAI Summary (DEV): Error from API.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "url": url,
+                        },
+                    )
+                    return None
+        except Exception as e:
+            logger.error(
+                "OpenAI Summary (DEV): Exception during request.",
+                exc_info=True,
+                extra=log_context,
+            )
+            return None
+
+
+# NEW FUNCTION: Update Vexu Call Emergency Status
+async def update_vexu_call_emergency_status(
+    vexu_call_id: str, is_emergency_status: bool
+):
+    log_context = {
+        "vexu_call_id": vexu_call_id,
+        "is_emergency_status": is_emergency_status,
+    }
+    if not vexu_call_id:
+        logger.warning(
+            "Vexu AI (DEV): Cannot update emergency status, Vexu Call ID is missing.",
+            extra=log_context,
+        )
+        return None
+
+    current_call_data = await get_vexu_call_details(vexu_call_id)
+    if not current_call_data:
+        logger.error(
+            f"Vexu AI (DEV): Failed to fetch existing call data for {vexu_call_id} to update emergency status. Aborting update.",
+            extra=log_context,
+        )
+        return None
+
+    # Only update if the status is changing to avoid unnecessary PUT requests
+    if current_call_data.get("is_emergency") == is_emergency_status:
+        logger.debug(
+            f"Vexu AI (DEV): is_emergency status for {vexu_call_id} is already {is_emergency_status}. No update needed.",
+            extra=log_context,
+        )
+        return None
+
+    payload = current_call_data.copy()
+    payload["is_emergency"] = is_emergency_status
+
+    headers = {
+        "accept": "application/json",
+        "X-AI-Service-Token": VEXU_API_TOKEN_DEV,
+        "Content-Type": "application/json",
+    }
+    url = f"{VEXU_API_BASE_URL_DEV}/{vexu_call_id}"
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    logger.info(
+        f"Vexu AI (DEV): Attempting to set is_emergency to {is_emergency_status} for call {vexu_call_id}.",
+        extra={**log_context, "url": url},
+    )
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.put(url, headers=headers, json=payload) as response:
+                if response.status >= 200 and response.status < 300:
+                    logger.info(
+                        f"Vexu AI (DEV): Successfully updated is_emergency status for call {vexu_call_id}.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "url": url,
+                        },
+                    )
+                    try:
+                        response_data = await response.json()
+                        logger.debug(
+                            "Vexu AI (DEV): Update emergency status response data preview.",
+                            extra={
+                                **log_context,
+                                "url": url,
+                                "response_data_preview": truncated_json_dumps(
+                                    response_data, max_string_len=150
+                                ),
+                            },
+                        )
+                        return response_data
+                    except aiohttp.ContentTypeError:
+                        text_response = await response.text()
+                        logger.warning(
+                            f"Vexu AI (DEV): Update emergency status response from {vexu_call_id} not JSON.",
+                            extra={
+                                **log_context,
+                                "url": url,
+                                "response_body_preview": text_response[:300],
+                            },
+                        )
+                        return text_response
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        f"Vexu AI (DEV): Error updating is_emergency status for call {vexu_call_id}.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "request_payload_preview": truncated_json_dumps(
+                                payload, max_string_len=150
+                            ),
+                        },
+                    )
+                    return None
+        except Exception as e:
+            logger.error(
+                f"Vexu AI (DEV): Exception during PUT request for emergency status update {vexu_call_id}.",
+                exc_info=True,
+                extra={**log_context, "url": url},
+            )
+            return None
+
+
+# MODIFIED FUNCTION: Check Call Urgency
+async def check_call_urgency(vexu_call_id: str, twilio_call_sid: str):
+    log_context = {"vexu_call_id": vexu_call_id, "twilio_call_sid": twilio_call_sid}
+    logger.info("Checking call urgency (DEV).", extra=log_context)
+
+    messages = await get_vexu_messages(vexu_call_id)
+    if not messages:
+        logger.warning(
+            "No messages found or error fetching for Vexu Call ID (DEV). Cannot check urgency.",
+            extra=log_context,
+        )
+        return
+
+    try:
+        messages.sort(
+            key=lambda m: (
+                datetime.fromisoformat(m["timestamp"].replace("Z", "+00:00"))
+                if "timestamp" in m and m["timestamp"]
+                else datetime.min.replace(tzinfo=timezone.utc)
+            )
+        )
+    except Exception as e:
+        logger.warning(
+            "Could not sort messages by timestamp for urgency check (DEV). Proceeding with original order.",
+            exc_info=True,
+            extra=log_context,
+        )
+
+    conversation_parts = [
+        f"{msg.get('sender', 'Unknown').capitalize()}: {msg.get('text', '').strip()}"
+        for msg in messages
+        if msg.get("text", "").strip()
+    ]
+    full_conversation_text = "\n".join(conversation_parts)
+
+    if not full_conversation_text.strip():
+        logger.info(
+            "No text content in messages for Vexu Call ID (DEV). Cannot check urgency.",
+            extra=log_context,
+        )
+        return
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENAI_API_KEY_DEV}",  # This key is sent, but the local server doesn't use it
+    }
+
+    data = {
+        "model": OPENAI_URGENCY_MODEL_DEV,
+        "messages": [
+            {
+                "role": "user",
+                "content": OPENAI_URGENCY_PROMPT_TEMPLATE_DEV.format(
+                    conversation_text=full_conversation_text
+                ),
+            }
+        ],
+        "temperature": OPENAI_URGENCY_TEMPERATURE_DEV,
+    }
+    url = f"{OPENAI_API_BASE_URL_DEV}/chat/completions"
+    timeout = aiohttp.ClientTimeout(total=10)  # Shorter timeout for quick check
+
+    logger.debug(
+        "OpenAI Urgency Check (DEV): Requesting urgency analysis.",
+        extra={
+            **log_context,
+            "model": OPENAI_URGENCY_MODEL_DEV,
+            "url": url,
+            "prompt_preview": data["messages"][0]["content"][:150],
+        },
+    )
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.post(url, headers=headers, json=data) as response:
+                if response.status == 200:
+                    urgency_response = await response.json()
+                    if (
+                        urgency_response.get("choices")
+                        and len(urgency_response["choices"]) > 0
+                    ):
+                        message_content = (
+                            urgency_response["choices"][0]
+                            .get("message", {})
+                            .get("content")
+                        )
+                        if message_content:
+                            urgency_result = (
+                                message_content.strip().upper()
+                            )  # Convert to uppercase for robust check
+                            logger.info(
+                                "Call Urgency Check (DEV): Result received.",
+                                extra={**log_context, "urgency_result": urgency_result},
+                            )
+
+                            # Check if the response contains "URGENT"
+                            if "it is related" in urgency_result.lower():
+                                logger.warning(
+                                    f"Call {vexu_call_id} detected as URGENT! Updating Vexu record.",
+                                    extra=log_context,
+                                )
+                                asyncio.create_task(
+                                    update_vexu_call_emergency_status(
+                                        vexu_call_id, True
+                                    )
+                                )
+                            else:
+                                logger.info(
+                                    f"Call {vexu_call_id} detected as NOT URGENT.",
+                                    extra=log_context,
+                                )
+                                # Optionally, you could set it to False if it was previously True,
+                                # but typically urgency is a one-way flag for a call.
+                                # asyncio.create_task(update_vexu_call_emergency_status(vexu_call_id, False))
+                            return urgency_result
+                        else:
+                            logger.warning(
+                                "Call Urgency Check (DEV): 'content' field missing in choice's message.",
+                                extra=log_context,
+                            )
+                            return None
+                    else:
+                        logger.warning(
+                            "Call Urgency Check (DEV): 'choices' field missing or empty in API response.",
+                            extra={
+                                **log_context,
+                                "api_response_preview": truncated_json_dumps(
+                                    urgency_response, max_string_len=150
+                                ),
+                            },
+                        )
+                        return None
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        "Call Urgency Check (DEV): Error from API.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "url": url,
+                        },
+                    )
+                    return None
+        except Exception as e:
+            logger.error(
+                "Call Urgency Check (DEV): Exception during request.",
+                exc_info=True,
+                extra=log_context,
+            )
+            return None
+
+
+async def get_vexu_call_details(vexu_call_id: str) -> Optional[Dict[str, Any]]:
+    log_context = {"vexu_call_id": vexu_call_id}
+    if not vexu_call_id:
+        logger.warning(
+            "Vexu AI (DEV): Cannot get call details, Vexu Call ID is missing.",
+            extra=log_context,
+        )
+        return None
+
+    headers = {"accept": "application/json", "X-AI-Service-Token": VEXU_API_TOKEN_DEV}
+    url = f"{VEXU_API_BASE_URL_DEV}/{vexu_call_id}"
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    logger.debug(
+        f"Vexu AI (DEV): Attempting to fetch call details.",
+        extra={**log_context, "url": url},
+    )
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    call_data = await response.json()
+                    logger.info(
+                        "Vexu AI (DEV): Successfully fetched call details.",
+                        extra={
+                            **log_context,
+                            "call_data_preview": truncated_json_dumps(
+                                call_data, max_string_len=150
+                            ),
+                        },
+                    )
+                    return call_data
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        f"Vexu AI (DEV): Error fetching call details for {vexu_call_id}.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "url": url,
+                        },
+                    )
+                    return None
+        except Exception as e:
+            logger.error(
+                f"Vexu AI (DEV): Exception during GET request for call details {vexu_call_id}.",
+                exc_info=True,
+                extra={**log_context, "url": url},
+            )
+            return None
+
+
+async def update_vexu_call_summary(
+    vexu_call_id: str,
+    summary_text: str,
+    caller_name_override: Optional[str] = None,
+    existing_call_data_fetched: Optional[Dict[str, Any]] = None,
+):
+    log_context = {
+        "vexu_call_id": vexu_call_id,
+        "caller_name_override": caller_name_override,
+    }
+    if not vexu_call_id:
+        logger.warning(
+            "Vexu AI (DEV): Cannot update call summary, Vexu Call ID is missing.",
+            extra=log_context,
+        )
+        return None
+    if not summary_text:
+        logger.warning(
+            f"Vexu AI (DEV): Cannot update call summary for {vexu_call_id}, summary text is empty.",
+            extra=log_context,
+        )
+        return None
+
+    current_call_data = existing_call_data_fetched
+    if not current_call_data:
+        current_call_data = await get_vexu_call_details(vexu_call_id)
+        if not current_call_data:
+            logger.critical(
+                f"Vexu AI (DEV): Failed to fetch existing call data for {vexu_call_id} to update summary. Cannot update accurately.",
+                extra=log_context,
+            )
+            return None
+
+    payload = current_call_data.copy()
+    payload["summary"] = summary_text
+
+    headers = {
+        "accept": "application/json",
+        "X-AI-Service-Token": VEXU_API_TOKEN_DEV,
+        "Content-Type": "application/json",
+    }
+    url = f"{VEXU_API_BASE_URL_DEV}/{vexu_call_id}"
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    logger.debug(
+        f"Vexu AI (DEV): Attempting to update call {vexu_call_id} with summary. Payload preview.",
+        extra={
+            **log_context,
+            "url": url,
+            "payload_preview": truncated_json_dumps(payload, max_string_len=150),
+        },
+    )
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.put(url, headers=headers, json=payload) as response:
+                if response.status >= 200 and response.status < 300:
+                    logger.info(
+                        f"Vexu AI (DEV): Successfully updated call {vexu_call_id} with summary.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "url": url,
+                        },
+                    )
+                    try:
+                        response_data = await response.json()
+                        logger.debug(
+                            "Vexu AI (DEV): Update summary response data preview.",
+                            extra={
+                                **log_context,
+                                "url": url,
+                                "response_data_preview": truncated_json_dumps(
+                                    response_data, max_string_len=150
+                                ),
+                            },
+                        )
+                        return response_data
+                    except aiohttp.ContentTypeError:
+                        text_response = (
+                            await response.text()
+                        )  # Capture text before logging
+                        logger.warning(
+                            f"Vexu AI (DEV): Update summary response from {vexu_call_id} not JSON.",
+                            extra={
+                                **log_context,
+                                "url": url,
+                                "response_body_preview": text_response[:300],
+                            },
+                        )
+                        return text_response
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        f"Vexu AI (DEV): Error updating call {vexu_call_id} with summary.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "request_payload_preview": truncated_json_dumps(
+                                payload, max_string_len=150
+                            ),
+                        },
+                    )
+                    return None
+        except Exception as e:
+            logger.error(
+                f"Vexu AI (DEV): Exception during PUT request for call summary update {vexu_call_id}.",
+                exc_info=True,
+                extra={**log_context, "url": url},
+            )
+            return None
+
+
+async def get_vexu_messages(vexu_call_id: str) -> List[Dict[str, Any]]:
+    log_context = {"vexu_call_id": vexu_call_id}
+    if not vexu_call_id:
+        logger.warning(
+            "Vexu AI (DEV): Cannot get messages, vexu_call_id is missing.",
+            extra=log_context,
+        )
+        return []
+
+    headers = {"accept": "application/json", "X-AI-Service-Token": VEXU_API_TOKEN_DEV}
+    url = f"{VEXU_API_BASE_URL_DEV}/{vexu_call_id}/messages?skip=0&limit=100"
+    timeout = aiohttp.ClientTimeout(total=10)
+    messages = []
+
+    logger.debug(
+        f"Vexu AI (DEV): Attempting to fetch messages for call_id: {vexu_call_id}.",
+        extra={**log_context, "url": url},
+    )
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    messages_data = await response.json()
+                    logger.info(
+                        f"Vexu AI (DEV): Successfully fetched {len(messages_data)} messages for {vexu_call_id}.",
+                        extra=log_context,
+                    )
+                    logger.debug(
+                        "Vexu AI (DEV): Fetched messages data preview.",
+                        extra={
+                            **log_context,
+                            "messages_preview": truncated_json_dumps(
+                                messages_data, max_string_len=150
+                            ),
+                        },
+                    )
+                    return messages_data
+                else:
+                    error_text = await response.text()
+                    logger.error(
+                        f"Vexu AI (DEV): Error fetching messages for {vexu_call_id}.",
+                        extra={
+                            **log_context,
+                            "status_code": response.status,
+                            "response_text_preview": error_text[:300],
+                            "url": url,
+                        },
+                    )
+        except Exception as e:
+            logger.error(
+                f"Vexu AI (DEV): Exception during request for messages for {vexu_call_id}.",
+                exc_info=True,
+                extra={**log_context, "url": url},
+            )
+    return messages
+
+
+async def process_call_summary_and_update(
+    vexu_call_id: str,
+    twilio_call_sid: Optional[str],
+    caller_name_for_summary: Optional[str],
+):
+    log_context = {
+        "vexu_call_id": vexu_call_id,
+        "twilio_call_sid": twilio_call_sid,
+        "caller_name_for_summary": caller_name_for_summary,
+    }
+    logger.info("Starting post-call summarization process (DEV).", extra=log_context)
+
+    messages = await get_vexu_messages(vexu_call_id)
+    if not messages:
+        logger.warning(
+            "No messages found or error fetching for Vexu Call ID (DEV). Aborting summarization.",
+            extra=log_context,
+        )
+        return
+
+    try:
+        messages.sort(
+            key=lambda m: (
+                datetime.fromisoformat(m["timestamp"].replace("Z", "+00:00"))
+                if "timestamp" in m and m["timestamp"]
+                else datetime.min.replace(tzinfo=timezone.utc)
+            )
+        )
+    except Exception as e:
+        logger.warning(
+            "Could not sort messages by timestamp due to format error (DEV). Proceeding with original order.",
+            exc_info=True,
+            extra=log_context,
+        )
+
+    conversation_parts = [
+        f"{msg.get('sender', 'Unknown').capitalize()}: {msg.get('text', '').strip()}"
+        for msg in messages
+        if msg.get("text", "").strip()
+    ]
+    full_conversation_text = "\n".join(conversation_parts)
+
+    if not full_conversation_text.strip():
+        logger.info(
+            "No text content in messages for Vexu Call ID (DEV). Aborting summarization.",
+            extra=log_context,
+        )
+        return
+
+    # IMPORTANT: This `get_openai_summary` still uses the *real* OpenAI API
+    # via OPENAI_API_BASE_URL_DEV (which is `http://localhost:8000` from .env,
+    # so it would go to server.py's FastAPI routes, not its websocket).
+    # This is distinct from the Realtime API WebSocket.
+    summary_text_generated = await get_openai_summary(
+        full_conversation_text, call_sid=twilio_call_sid
+    )
+    if not summary_text_generated:
+        logger.warning(
+            "Failed to generate summary for Vexu Call ID (DEV). Aborting update.",
+            extra=log_context,
+        )
+        return
+
+    logger.info(
+        "Generated summary for Vexu Call ID (DEV).",
+        extra={**log_context, "summary_text_preview": summary_text_generated[:100]},
+    )
+
+    existing_call_data = await get_vexu_call_details(vexu_call_id)
+    if not existing_call_data:
+        logger.critical(
+            "CRITICAL: Failed to retrieve existing call details for summary update (DEV). Summary cannot be updated with full context. Aborting PUT.",
+            extra=log_context,
+        )
+        return
+
+    await update_vexu_call_summary(
+        vexu_call_id=vexu_call_id,
+        summary_text=summary_text_generated,
+        caller_name_override=caller_name_for_summary,
+        existing_call_data_fetched=existing_call_data,
+    )
+
+
 @router.get("/", response_class=JSONResponse)
 async def index_page():
     return JSONResponse(
@@ -270,9 +1257,70 @@ async def handle_incoming_call(request: Request):
         f"Incoming call to Vexu number (DEV): {twilio_reciever_number}. Fetching user details.",
         extra=log_context_call,
     )
+    vexu_user_data = await get_vexu_user_details(twilio_reciever_number)
 
+    if (
+        not vexu_user_data
+        or not vexu_user_data.get("name")
+        or not vexu_user_data.get("user_id")
+    ):
+        logger.critical(
+            f"CRITICAL ERROR: Could not fetch complete dynamic user details (name, user_id) from Vexu API (DEV) for {twilio_reciever_number}.",
+            extra={
+                **log_context_call,
+                "vexu_user_data_received": truncated_json_dumps(vexu_user_data),
+            },
+        )
+        raise ValueError(
+            f"Failed to fetch complete Vexu user details (name and user_id) for {twilio_reciever_number}."
+        )
+
+    owner_name_for_call = vexu_user_data["name"]
+    user_id_for_call = vexu_user_data["user_id"]
+    logger.info(
+        f"Using dynamic owner (DEV): '{owner_name_for_call}', user_id: '{user_id_for_call}'.",
+        extra={
+            **log_context_call,
+            "owner_name_for_call": owner_name_for_call,
+            "user_id_for_call": user_id_for_call,
+        },
+    )
+    start_call_response = await post_vexu_start_call(
+        twilio_call_sid=twilio_call_sid,
+        caller_phone=caller_phone,
+        dynamic_vexu_user_id=user_id_for_call,
+    )
+
+    if not start_call_response or not start_call_response.get("vexu_call_id"):
+        logger.critical(
+            "CRITICAL ERROR: Failed to obtain vexu_call_id from Vexu after posting start call (DEV).",
+            extra={
+                **log_context_call,
+                "user_id_used": user_id_for_call,
+                "start_call_response_preview": truncated_json_dumps(
+                    start_call_response
+                ),
+            },
+        )
+        raise RuntimeError(f"Failed to create Vexu call record (vexu_call_id is null).")
+
+    vexu_call_id = start_call_response["vexu_call_id"]
+    retrieved_caller_name = start_call_response.get("caller_name")
+
+    logger.info(
+        f"Vexu Call ID established (DEV): {vexu_call_id}. Retrieved Caller Name: {retrieved_caller_name}.",
+        extra={
+            **log_context_call,
+            "vexu_call_id": vexu_call_id,
+            "retrieved_caller_name": retrieved_caller_name,
+        },
+    )
     call_buffer[twilio_call_sid] = {
+        "vexu_call_id": vexu_call_id,
         "caller_phone": caller_phone,
+        "owner_name": owner_name_for_call,
+        "vexu_user_id": user_id_for_call,
+        "caller_name": retrieved_caller_name,
         "agent_initiated_hangup": False,
         "twilio_reciever_number": twilio_reciever_number,
         # NEW: Audio buffering and VAD state for caller's turn
@@ -327,7 +1375,7 @@ async def handle_media_stream(websocket: WebSocket):
         mark_queue = []
         response_start_timestamp_twilio = None
 
-        async def receive_from_twilio():
+        async def receive_from_twilio(): # receive from the ws from orchestrator ws/sid @Borhan
             nonlocal call_sid, stream_sid, response_start_timestamp_twilio, last_assistant_item, mark_queue, log_context, audio_logger_instance
             session_initialized_for_this_call = False
             try:
@@ -407,7 +1455,7 @@ async def handle_media_stream(websocket: WebSocket):
                                 "audio_logger"
                             ]  # Store reference
                         # --- End NEW ---
-                        # @Borhan: the owner_name is needed for the prompt, we must get it from the dashboard
+
                         owner_name_for_prompt = call_data["owner_name"]
                         caller_name_from_buffer = call_data.get("caller_name")
                         caller_name_greeting_segment = (
@@ -416,7 +1464,6 @@ async def handle_media_stream(websocket: WebSocket):
                             else "Unknown"
                         )
                         if not session_initialized_for_this_call:
-                            # @Borhan: add the owner_name HERE!
                             dynamic_system_prompt = SYSTEM_MESSAGE_TEMPLATE_DEV.format(
                                 owner_name=owner_name_for_prompt,
                                 owner_subject_pronouns="he",
@@ -431,7 +1478,6 @@ async def handle_media_stream(websocket: WebSocket):
                             # Connect to all servers
                             call_agent.owner_id = twilio_reciever_number
                             call_agent.system_prompt = dynamic_system_prompt
-                            # @Borhan Dashboard kb id
                             call_agent.kb_id = ["kb+12345952496_en"]
                             await call_agent.connect_servers()
 
@@ -627,6 +1673,36 @@ async def handle_media_stream(websocket: WebSocket):
                 current_vexu_call_id = None
                 retrieved_caller_name_for_summary = None
 
+                if call_sid and call_sid in call_buffer:
+                    current_vexu_call_id = call_buffer[call_sid].get("vexu_call_id")
+                    retrieved_caller_name_for_summary = call_buffer[call_sid].get(
+                        "caller_name"
+                    )
+                    if current_vexu_call_id:
+                        logger.info(
+                            "Posting Vexu end call (DEV).",
+                            extra={
+                                **log_context,
+                                "vexu_call_id": current_vexu_call_id,
+                            },
+                        )
+                        await post_vexu_end_call(vexu_call_id=current_vexu_call_id)
+                        await process_call_summary_and_update(
+                            vexu_call_id=current_vexu_call_id,
+                            twilio_call_sid=call_sid,
+                            caller_name_for_summary=retrieved_caller_name_for_summary,
+                        )
+                    else:
+                        logger.warning(
+                            "Vexu Call ID not found in buffer for end call/summarization (DEV).",
+                            extra=log_context,
+                        )
+                else:
+                    logger.warning(
+                        "Call SID not in buffer or not set for end call/summarization (DEV).",
+                        extra=log_context,
+                    )
+
                 # --- NEW: Finalize and save audio logs ---
                 if audio_logger_instance:
                     await audio_logger_instance.finalize_and_save()
@@ -667,6 +1743,29 @@ async def handle_media_stream(websocket: WebSocket):
                     if not call_agent.formatted_audio_responses:
                         await asyncio.sleep(0.1)  # Short sleep to avoid CPU spinning
                         continue
+
+                    # # @Borhan: Interupt added (the if statement)
+                    # if call_agent.interrupt_requested:
+                    #     logger.info(
+                    #         "Interruption requested - clearing audio buffer and resetting state",
+                    #         extra=log_context
+                    #     )
+
+                    #     # Clear all pending audio responses
+                    #     call_agent.formatted_audio_responses.clear()
+
+                    #     # Reset interruption state
+                    #     call_agent.interrupt_requested = False
+                    #     call_agent.is_responding = False
+
+                    #     # Clear local buffer
+                    #     gpt_output_buffer = b''
+
+                    #     logger.info(
+                    #         "Interruption completed - ready for new input",
+                    #         extra=log_context
+                    #     )
+                    #     continue
 
                     response = call_agent.formatted_audio_responses.pop(0)
                     if response["type"] in LOG_EVENT_TYPES:
@@ -765,74 +1864,88 @@ async def handle_media_stream(websocket: WebSocket):
                             )
 
                         # Determine if this transcript is for the agent or the caller
-                        # @Borhan: The transcript from both caller and agent will be sent to app
-                        # if gpt_output_buffer:  # This is the agent's response
-                        #     agent_audio_for_vexu_pcm16_8khz = gpt_output_buffer
-                        #     asyncio.create_task(
-                        #         post_vexu_message_async(
-                        #             vexu_call_id=current_vexu_call_id,
-                        #             text=response["transcript"],
-                        #             sender="agent",
-                        #             audio_pcm16_8khz_bytes=agent_audio_for_vexu_pcm16_8khz,
-                        #         )
-                        #     )
-                        #     logger.info(
-                        #         "Sent agent message to Vexu AI (DEV).",
-                        #         extra={
-                        #             **log_context,
-                        #             "vexu_call_id": current_vexu_call_id,
-                        #             "transcript_preview": response["transcript"][:100],
-                        #         },
-                        #     )
-                        #     gpt_output_buffer = b""  # Clear agent's audio buffer
+                        if gpt_output_buffer:  # This is the agent's response
+                            agent_audio_for_vexu_pcm16_8khz = gpt_output_buffer
+                            asyncio.create_task(
+                                post_vexu_message_async(
+                                    vexu_call_id=current_vexu_call_id,
+                                    text=response["transcript"],
+                                    sender="agent",
+                                    audio_pcm16_8khz_bytes=agent_audio_for_vexu_pcm16_8khz,
+                                )
+                            )
+                            logger.info(
+                                "Sent agent message to Vexu AI (DEV).",
+                                extra={
+                                    **log_context,
+                                    "vexu_call_id": current_vexu_call_id,
+                                    "transcript_preview": response["transcript"][:100],
+                                },
+                            )
+                            gpt_output_buffer = b""  # Clear agent's audio buffer
 
-                        #     agent_transcript_lower = response["transcript"].lower()
-                        #     if (
-                        #         call_sid
-                        #         and call_sid in call_buffer
-                        #         and any(
-                        #             keyword in agent_transcript_lower
-                        #             for keyword in HANGUP_KEYWORDS
-                        #         )
-                        #     ):
-                        #         logger.info(
-                        #             f"Agent said bye keyword (DEV): '{response['transcript']}'. Flagging for hangup after audio playback.",
-                        #             extra={
-                        #                 **log_context,
-                        #                 "transcript": response["transcript"],
-                        #             },
-                        #         )
-                        #         call_buffer[call_sid]["agent_initiated_hangup"] = True
-                        # else:  # This is the caller's response (transcribed by server.py)
-                        #     # NEW: Retrieve the pre-processed and trimmed audio from call_buffer
-                        #     call_data = call_buffer.get(call_sid)
-                        #     pcm_audio_caller_for_vexu = b""
-                        #     if call_data:
-                        #         pcm_audio_caller_for_vexu = call_data.pop(
-                        #             "last_caller_audio_for_vexu", b""
-                        #         )
-                        #         if not pcm_audio_caller_for_vexu:
-                        #             logger.warning(
-                        #                 "No trimmed caller audio found for Vexu message (DEV). Sending empty audio.",
-                        #                 extra=log_context,
-                        #             )
-                        #     else:
-                        #         logger.warning(
-                        #             "Call data not found for Vexu message (DEV). Sending empty audio.",
-                        #             extra=log_context,
-                        #         )
+                            agent_transcript_lower = response["transcript"].lower()
+                            if (
+                                call_sid
+                                and call_sid in call_buffer
+                                and any(
+                                    keyword in agent_transcript_lower
+                                    for keyword in HANGUP_KEYWORDS
+                                )
+                            ):
+                                logger.info(
+                                    f"Agent said bye keyword (DEV): '{response['transcript']}'. Flagging for hangup after audio playback.",
+                                    extra={
+                                        **log_context,
+                                        "transcript": response["transcript"],
+                                    },
+                                )
+                                call_buffer[call_sid]["agent_initiated_hangup"] = True
+                        else:  # This is the caller's response (transcribed by server.py)
+                            # NEW: Retrieve the pre-processed and trimmed audio from call_buffer
+                            call_data = call_buffer.get(call_sid)
+                            pcm_audio_caller_for_vexu = b""
+                            if call_data:
+                                pcm_audio_caller_for_vexu = call_data.pop(
+                                    "last_caller_audio_for_vexu", b""
+                                )
+                                if not pcm_audio_caller_for_vexu:
+                                    logger.warning(
+                                        "No trimmed caller audio found for Vexu message (DEV). Sending empty audio.",
+                                        extra=log_context,
+                                    )
+                            else:
+                                logger.warning(
+                                    "Call data not found for Vexu message (DEV). Sending empty audio.",
+                                    extra=log_context,
+                                )
 
-                        #     logger.info(
-                        #         "Sent caller message to Vexu (DEV) using server's transcript and trimmed audio.",
-                        #         extra={
-                        #             **log_context,
-                        #             "vexu_call_id": current_vexu_call_id,
-                        #             "transcript_preview": response["transcript"][:100],
-                        #             "audio_bytes_len": len(pcm_audio_caller_for_vexu),
-                        #         },
-                        #     )
-                        #     # caller_audio_buffer.clear() # REMOVED: Buffer is now cleared in speech_stopped
+                            asyncio.create_task(
+                                post_vexu_message_async(
+                                    vexu_call_id=current_vexu_call_id,
+                                    text=response["transcript"],
+                                    sender="caller",
+                                    audio_pcm16_8khz_bytes=pcm_audio_caller_for_vexu,
+                                )
+                            )
+                            logger.info(
+                                "Sent caller message to Vexu (DEV) using server's transcript and trimmed audio.",
+                                extra={
+                                    **log_context,
+                                    "vexu_call_id": current_vexu_call_id,
+                                    "transcript_preview": response["transcript"][:100],
+                                    "audio_bytes_len": len(pcm_audio_caller_for_vexu),
+                                },
+                            )
+                            # caller_audio_buffer.clear() # REMOVED: Buffer is now cleared in speech_stopped
 
+                        # Check urgency after ANY message (caller or agent)
+                        asyncio.create_task(
+                            check_call_urgency(
+                                vexu_call_id=current_vexu_call_id,
+                                twilio_call_sid=call_sid,
+                            )
+                        )
 
                     elif response.get("type") == "input_audio_buffer.speech_stopped":
 
