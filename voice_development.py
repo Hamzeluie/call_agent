@@ -130,6 +130,15 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
     try:
         async for message in websocket.iter_text():
             try:
+                
+                if await voice_agent.is_session_interrupt(sid):
+                    await websocket.send_json(
+                        {
+                            "event": "interrupt",
+                            "message": "Your session has interrupt due to inactivity.",
+                        }
+                    )
+
                 data = json.loads(message)
                 event_type = data.get("event")
 
@@ -190,16 +199,6 @@ async def receive_from_frontend(sid: str, data: dict):
 async def send_to_frontend(websocket: WebSocket, sid: str):
     try:
         async for chunk in voice_agent.predict(sid):
-            if not await voice_agent.is_session_active(sid):
-                await websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "interrupt",
-                            "message": "Your session has interrupt due to inactivity.",
-                        }
-                    )
-                )
-
             # 1. Decode the base64 audio (this is float32 PCM at 24kHz)
             float32_bytes = base64.b64decode(chunk.audio)
 

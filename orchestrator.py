@@ -291,78 +291,74 @@ async def websocket_endpoint(websocket: WebSocket, call_sid: str):
 
     session.client_ws = websocket
 
-    try:
-        ws_url = session.backend_ws_url
-        if not ws_url:
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "Backend WebSocket URL not found in session.",
-                }
-            )
-            await websocket.close()
-            return
-
-        # Connect to Twilio WebSocket
-        async with websockets.connect(
-            ws_url, ping_interval=20, ping_timeout=10
-        ) as twilio_ws:
-            session.twilio_ws = twilio_ws
-            session.is_active = True
-
-            # START MODIFICATION: Start the sequential mark processor task
-            session.mark_processor_task = asyncio.create_task(
-                process_mark_acknowledgments(session)
-            )
-            # END MODIFICATION
-            # Send start event
-            start_event = {
-                "event": "start",
-                "sequenceNumber": "1",
-                "start": {
-                    "streamSid": session.stream_sid,
-                    "callSid": call_sid,
-                    "accountSid": f"AC{uuid.uuid4().hex[:32]}",
-                    "tracks": ["inbound"],
-                    "mediaFormat": {
-                        "encoding": "audio/x-mulaw",
-                        "sampleRate": 8000,
-                        "channels": 1,
-                    },
-                },
-                "streamSid": session.stream_sid,
+    # try:
+    ws_url = session.backend_ws_url
+    if not ws_url:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Backend WebSocket URL not found in session.",
             }
-            await twilio_ws.send(json.dumps(start_event))
-
-            # Notify client that connection is established
-            await websocket.send_json({"type": "connected", "status": "Call connected"})
-
-            # Create tasks for bidirectional communication
-            client_to_twilio_task = asyncio.create_task(
-                forward_client_to_twilio(session)
-            )
-            twilio_to_client_task = asyncio.create_task(
-                forward_twilio_to_client(session)
-            )
-
-            # Wait for tasks to complete
-            await asyncio.gather(client_to_twilio_task, twilio_to_client_task)
-
-    except Exception as e:
-        await websocket.send_json({"type": "error", "message": str(e)})
-    finally:
-        session.is_active = False
-        # START MODIFICATION: Cleanly shut down the mark processor task
-        if (
-            session
-            and session.mark_processor_task
-            and not session.mark_processor_task.done()
-        ):
-            session.mark_processor_task.cancel()
-        # END MODIFICATION
-        if call_sid in active_calls:
-            del active_calls[call_sid]
+        )
         await websocket.close()
+        return
+
+    # Connect to Twilio WebSocket
+    async with websockets.connect(
+        ws_url, ping_interval=20, ping_timeout=10
+    ) as twilio_ws:
+        session.twilio_ws = twilio_ws
+        session.is_active = True
+
+        # START MODIFICATION: Start the sequential mark processor task
+        session.mark_processor_task = asyncio.create_task(
+            process_mark_acknowledgments(session)
+        )
+        # END MODIFICATION
+        # Send start event
+        start_event = {
+            "event": "start",
+            "sequenceNumber": "1",
+            "start": {
+                "streamSid": session.stream_sid,
+                "callSid": call_sid,
+                "accountSid": f"AC{uuid.uuid4().hex[:32]}",
+                "tracks": ["inbound"],
+                "mediaFormat": {
+                    "encoding": "audio/x-mulaw",
+                    "sampleRate": 8000,
+                    "channels": 1,
+                },
+            },
+            "streamSid": session.stream_sid,
+        }
+        await twilio_ws.send(json.dumps(start_event))
+
+        # Notify client that connection is established
+        await websocket.send_json({"type": "connected", "status": "Call connected"})
+
+        # Create tasks for bidirectional communication
+        client_to_twilio_task = asyncio.create_task(forward_client_to_twilio(session))
+        twilio_to_client_task = asyncio.create_task(forward_twilio_to_client(session))
+
+        # Wait for tasks to complete
+        await asyncio.gather(client_to_twilio_task, twilio_to_client_task)
+
+    # except Exception as e:
+    #     await websocket.send_json({"type": "error", "message": str(e)})
+    # finally:
+    #     session.is_active = False
+    #     # START MODIFICATION: Cleanly shut down the mark processor task
+    #     if (
+    #         session
+    #         and session.mark_processor_task
+    #         and not session.mark_processor_task.done()
+    #     ):
+    #         session.mark_processor_task.cancel()
+    #     # END MODIFICATION
+    #     if call_sid in active_calls:
+    #         del active_calls[call_sid]
+    #     await websocket.close()
 
 
 async def forward_client_to_twilio(session: CallSession):
@@ -370,56 +366,54 @@ async def forward_client_to_twilio(session: CallSession):
     sequence_number = 2
     media_timestamp = 0
 
-    try:
-        while session.is_active:
-            message = await session.client_ws.receive_json()
+    # try:
+    while session.is_active:
+        message = await session.client_ws.receive_json()
 
-            if message["type"] == "audio":
-                # Browser sends PCM 16-bit audio at 8kHz as base64
-                pcm_data = base64.b64decode(message["audio"])
-                # Convert PCM to μ-law using our new function
-                pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
-                mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+        if message["type"] == "audio":
+            # Browser sends PCM 16-bit audio at 8kHz as base64
+            pcm_data = base64.b64decode(message["audio"])
+            # Convert PCM to μ-law using our new function
+            pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
+            mulaw_data = audioop.lin2ulaw(pcm_data, 2)
 
-                # Send to Twilio as media event
-                media_event = {
-                    "event": "media",
-                    "sequenceNumber": str(sequence_number),
-                    "media": {
-                        "timestamp": str(int(media_timestamp)),
-                        "payload": base64.b64encode(mulaw_data).decode("utf-8"),
-                        "track": "inbound",
-                    },
-                    "streamSid": session.stream_sid,
-                }
-                await session.twilio_ws.send(json.dumps(media_event))
+            # Send to Twilio as media event
+            media_event = {
+                "event": "media",
+                "sequenceNumber": str(sequence_number),
+                "media": {
+                    "timestamp": str(int(media_timestamp)),
+                    "payload": base64.b64encode(mulaw_data).decode("utf-8"),
+                    "track": "inbound",
+                },
+                "streamSid": session.stream_sid,
+            }
+            await session.twilio_ws.send(json.dumps(media_event))
 
-                sequence_number += 1
-                media_timestamp += (len(pcm_array) * 1000) / 8000
+            sequence_number += 1
+            media_timestamp += (len(pcm_array) * 1000) / 8000
 
-            elif message["type"] == "stop":
-                print(
-                    f"Client sent 'stop' for call {session.call_sid}. Closing connection to backend."
-                )
-                stop_event = {
-                    "event": "stop",
-                    "sequenceNumber": str(sequence_number),
-                    "streamSid": session.stream_sid,
-                }
-                if session.twilio_ws and not session.twilio_ws.closed:
-                    try:
-                        await session.twilio_ws.send(json.dumps(stop_event))
-                        await session.twilio_ws.close()
-                    except Exception as e:
-                        print(
-                            f"Exception while closing backend websocket on 'stop': {e}"
-                        )
-                session.is_active = False
-                break
+        elif message["type"] == "stop":
+            print(
+                f"Client sent 'stop' for call {session.call_sid}. Closing connection to backend."
+            )
+            stop_event = {
+                "event": "stop",
+                "sequenceNumber": str(sequence_number),
+                "streamSid": session.stream_sid,
+            }
+            if session.twilio_ws and not session.twilio_ws.closed:
+                try:
+                    await session.twilio_ws.send(json.dumps(stop_event))
+                    await session.twilio_ws.close()
+                except Exception as e:
+                    print(f"Exception while closing backend websocket on 'stop': {e}")
+            session.is_active = False
+            break
 
-    except Exception as e:
-        print(f"Error in forward_client_to_twilio: {e}")
-        session.is_active = False
+    # except Exception as e:
+    #     print(f"Error in forward_client_to_twilio: {e}")
+    #     session.is_active = False
 
 
 async def forward_twilio_to_client(session: CallSession):
@@ -428,7 +422,6 @@ async def forward_twilio_to_client(session: CallSession):
         while session.is_active:
             message = await session.twilio_ws.recv()
             data = json.loads(message)
-
             if data["event"] == "media":
                 mulaw_payload = data["media"]["payload"]
                 mulaw_data = base64.b64decode(mulaw_payload)
@@ -457,15 +450,16 @@ async def forward_twilio_to_client(session: CallSession):
                 # END MODIFICATION
 
             elif data["event"] == "clear":
-                print(
-                    f"Forwarding 'clear' event for streamSid: {data.get('streamSid')}"
-                )
+                print(f"Forwarding 'clear' event for streamSid: {data.get('streamSid')}")
                 await session.client_ws.send_json({"type": "clear_audio"})
 
             elif data["event"] == "stop":
                 await session.client_ws.send_json({"type": "stop"})
                 session.is_active = False
                 break
+
+            elif data["event"] == "interrupt":
+                await session.client_ws.send_json({"type": "interrupt"})
 
     except Exception as e:
         print(f"Error in forward_twilio_to_client: {e}")

@@ -483,6 +483,9 @@
                             console.log('Received clear_audio signal. Stopping playback.');
                             this.clearAudioPlayback();
                         // END MODIFICATION
+                        } else if (data.type === 'interrupt') {
+                            console.log('Received interrupt signal. Stopping all audio playback.');
+                            this.clearAudioPlayback();
                         } else if (data.type === 'error') {
                             this.errorMessage.textContent = data.message;
                             this.setStatus('Error during call', 'error');
@@ -636,22 +639,26 @@
             
             // START MODIFICATION: New method to clear audio playback
             clearAudioPlayback() {
+                // Stop current playing source (if any)
                 if (this.currentAudioSourceNode) {
                     try {
                         this.currentAudioSourceNode.stop();
                         this.currentAudioSourceNode.disconnect();
-                        console.log('Stopped current audio source node.');
                     } catch (e) {
-                        console.warn('Error stopping audio source node:', e);
-                    } finally {
-                        this.currentAudioSourceNode = null;
+                        console.warn('Error stopping current audio source:', e);
                     }
+                    this.currentAudioSourceNode = null;
                 }
-                this.audioQueue = []; // Clear the queue
-                this.nextPlayTime = 0; // Reset playback time
-                this.isProcessingQueue = false; // Stop queue processing
-                this.isPlaying = false; // Update playback status
-                console.log('Audio playback cleared.');
+
+                // Clear the entire queue
+                this.audioQueue = [];
+
+                // Reset timing and flags
+                this.nextPlayTime = 0;
+                this.isProcessingQueue = false;
+                this.isPlaying = false;
+
+                console.log('Audio playback and queue cleared due to interrupt.');
             }
             // END MODIFICATION
 

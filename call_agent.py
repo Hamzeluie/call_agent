@@ -97,7 +97,6 @@ class RedisQueueManager(AbstractQueueManagerClient):
             try:
                 status_obj = AgentSessions.from_json(raw_status)
                 if status_obj.status == SessionStatus.STOP or status_obj.is_expired():
-                    print(f"sid {status_obj.sid} is stoped")
                     await self.stop_session(status_obj.sid)
             except Exception as e:
                 logger.warning(f"Failed to parse session {sid}: {e}")
@@ -109,7 +108,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
             for sid, raw_status in sessions.items():
                 status_obj = AgentSessions.from_json(raw_status)
                 if status_obj.status == SessionStatus.INTERRUPT:
-                    print("🦓🦓🦓🦓🦓")
+                    # print("🦓🦓🦓🦓🦓")
                     await self.interrupt_session_requests(status_obj)
         except Exception as e:
             logger.warning(f"Failed to interrupt session {sid}: {e}")
@@ -136,6 +135,19 @@ class RedisQueueManager(AbstractQueueManagerClient):
             await self.stop_session(sid)
             return False
         return True
+
+    async def is_session_interrupt(self, sid: str) -> bool:
+        """Check if a session is active"""
+        status_obj = await self.get_status_object(sid)
+        print("STATUS OBJECT: => ", status_obj)
+        if status_obj is None:
+            return True
+        if status_obj.is_expired():
+            await self.stop_session(sid)
+            return True
+        if status_obj.status == SessionStatus.INTERRUPT:
+            return True
+        return False
 
     async def cleanup_session_requests(self, req: AgentSessions):
         """Remove any queued requests for stopped session"""
@@ -268,6 +280,10 @@ class InferenceService(AbstractInferenceClient):
     async def is_session_active(self, sid: str) -> bool:
         """Check if a session is active"""
         return await self.queue_manager.is_session_active(sid)
+
+    async def is_session_interrupt(self, sid: str) -> bool:
+        """Check if a session is active"""
+        return await self.queue_manager.is_session_interrupt(sid)
 
     async def _initialize_components(self):
         await self.queue_manager.initialize()
