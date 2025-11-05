@@ -130,7 +130,7 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
     try:
         async for message in websocket.iter_text():
             try:
-                
+
                 if await voice_agent.is_session_interrupt(sid):
                     await websocket.send_json(
                         {
@@ -200,6 +200,11 @@ async def send_to_frontend(websocket: WebSocket, sid: str):
     try:
         async for chunk in voice_agent.predict(sid):
             # 1. Decode the base64 audio (this is float32 PCM at 24kHz)
+            if await voice_agent.is_session_interrupt(sid):
+                logger.info(
+                    f"Interrupt detected in send_to_frontend for {sid}, dropping chunk"
+                )
+
             float32_bytes = base64.b64decode(chunk.audio)
 
             if not float32_bytes:

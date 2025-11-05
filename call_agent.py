@@ -203,6 +203,18 @@ class RedisQueueManager(AbstractQueueManagerClient):
 
         try:
             while True:
+
+                # Check if session was interrupted during processing
+                if not await self.is_session_interrupt(sid):
+                    raw = await self.redis_client.hget(self.active_sessions_key, sid)
+                    if raw is not None:
+                        logger.info(
+                            f"Session {sid} interrupted — stopping audio stream"
+                        )
+                        status_obj = AgentSessions.from_json(raw)
+                        if status_obj.status == SessionStatus.INTERRUPT:
+                            await self.interrupt_session_requests(status_obj)
+
                 # Check if session was stopped during processing
                 if not await self.is_session_active(sid):
                     raise Exception(f"Session {sid} was stopped during processing")

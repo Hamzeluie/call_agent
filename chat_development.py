@@ -46,7 +46,7 @@ chat_agent = InferenceService(
     channels_steps={"RAG": ["high", "low"]},
     input_channel="RAG:low",
     output_channel="chat:output",
-    timeout=30.0,
+    timeout=60.0,
 )
 
 
@@ -132,7 +132,7 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
         )
 
         while True:
-            
+
             if not await chat_agent.is_session_active(sid):
                 await websocket.send_text(
                     json.dumps(
@@ -154,15 +154,16 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
 
             try:
                 response = []
-                await chat_agent.send_chunk(user_message, sid)
+                await chat_agent.send_chunk(sid=sid, input_data=user_message)
 
                 async for chunk in chat_agent.predict(sid):
-                    if chunk.is_final:
-                        break
                     response.append(chunk.text)
                     await websocket.send_text(
                         json.dumps({"type": "chunk", "content": chunk.text})
                     )
+                    if chunk.is_final:
+                        break
+
                 await websocket.send_text(
                     json.dumps({"type": "complete", "message": "".join(response)})
                 )
