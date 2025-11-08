@@ -139,7 +139,6 @@ class RedisQueueManager(AbstractQueueManagerClient):
     async def is_session_interrupt(self, sid: str) -> bool:
         """Check if a session is active"""
         status_obj = await self.get_status_object(sid)
-        print("STATUS OBJECT: => ", status_obj)
         if status_obj is None:
             return True
         if status_obj.is_expired():

@@ -157,11 +157,13 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
                 await chat_agent.send_chunk(sid=sid, input_data=user_message)
 
                 async for chunk in chat_agent.predict(sid):
+                    print("=>", chunk.text)
                     response.append(chunk.text)
                     await websocket.send_text(
                         json.dumps({"type": "chunk", "content": chunk.text})
                     )
                     if chunk.is_final:
+                        print("*> BREAK")
                         break
 
                 await websocket.send_text(

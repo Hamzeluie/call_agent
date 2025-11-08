@@ -152,7 +152,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
             service_names=status_obj.service_names,
             channels_steps=status_obj.channels_steps,
             last_channel=status_obj.last_channel,
-            prioriry="low",
+            prioriry=request_data.priority,
         )
         await self.redis_client.lpush(next_service, request_data.to_json())
         logger.info(f"Request {sid} submitted to {next_service}")
@@ -177,6 +177,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
 
                 # Block indefinitely until an item is available
                 result = await temp_client.brpop(status_obj.last_channel, timeout=0)
+                print(f"✅brpop result: {result}")
 
                 # BRPOP with timeout=0 blocks forever until an item arrives
                 if result is None:
@@ -280,11 +281,12 @@ class InferenceService(AbstractInferenceClient):
     async def send_chunk(self, sid: str, input_data: str) -> None:
         if not await self.is_session_active(sid):
             raise Exception(f"Session is not active or has been stopped")
+        first_service, priority = self.input_channel.split(":")
         input_request = TextFeatures(
             sid=sid,
             agent_type=self.agent_type,
             is_final=False,
-            priority="input",
+            priority=priority,
             created_at=None,
             text=input_data,
         )

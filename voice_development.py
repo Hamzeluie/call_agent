@@ -3,6 +3,8 @@ import audioop
 import base64
 import contextlib
 import json
+import os
+import wave
 from typing import Dict, List
 from uuid import uuid4
 
@@ -25,6 +27,10 @@ from utils import get_env_variable
 
 # Initialize the logger for this module
 logger = get_logger(__name__)
+
+TARGET_STREAM_SAMPLE_RATE = 8000
+CHUNK_DURATION_MS = 40
+CHUNK_SAMPLES = int(TARGET_STREAM_SAMPLE_RATE * CHUNK_DURATION_MS / 1000)
 
 ENDPOINT_VOICE = get_env_variable("ENDPOINT_VOICE")
 
@@ -106,8 +112,8 @@ async def handle_incoming_call(request: Request):
     agent_id = form.get("agent_id")
     user_id = form.get("user_id")
     sid = form.get("sid")
-    await voice_agent.start_session(sid=sid, owner_id=owner_id, agent_id=agent_id)
 
+    await voice_agent.start_session(sid=sid, owner_id=owner_id, agent_id=agent_id)
     # --- Send SID in an HTTP Header ---
     return JSONResponse(
         {
@@ -127,6 +133,7 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
     #     return
 
     send_task = asyncio.create_task(send_to_frontend(websocket, sid))
+
     try:
         async for message in websocket.iter_text():
             try:
@@ -139,16 +146,93 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
                         }
                     )
 
+                if await voice_agent.is_session_active(sid) == False:
+                    await websocket.send_json(
+                        {
+                            "event": "stop",
+                            "message": "Your session has stopped due to inactivity.",
+                        }
+                    )
+
                 data = json.loads(message)
                 event_type = data.get("event")
 
                 if event_type == "start":
                     logger.info(f"Call started for session {sid}: {data}")
+
+                    # initialize call by passing a sound file contiane "hello"
+                    file_path = "./who.wav"
+                    if os.path.exists(file_path):
+                        print(f"Streaming audio from {file_path} to initialize call...")
+
+                        with wave.open(file_path, "rb") as wf:
+                            # Get audio parameters
+                            n_channels = wf.getnchannels()
+                            source_sr = wf.getframerate()
+                            samp_width = wf.getsampwidth()
+                            n_frames = wf.getnframes()
+
+                            # Read all audio frames
+                            raw_audio = wf.readframes(n_frames)
+
+                        # Convert raw bytes to numpy array
+                        if samp_width == 1:
+                            dtype = np.uint8
+                        elif samp_width == 2:
+                            dtype = np.int16
+                        elif samp_width == 4:
+                            dtype = np.int32
+                        else:
+                            raise ValueError(f"Unsupported sample width: {samp_width}")
+
+                        audio_data = np.frombuffer(raw_audio, dtype=dtype)
+
+                        # Convert to mono if stereo
+                        if n_channels == 2:
+                            audio_data = audio_data.reshape(-1, 2).mean(axis=1)
+
+                        # Convert to float32 in range [-1, 1]
+                        if samp_width == 1:
+                            audio_data = (audio_data - 128) / 128.0
+                        elif samp_width == 2:
+                            audio_data = audio_data / 32768.0
+                        elif samp_width == 4:
+                            audio_data = audio_data / 2147483648.0
+
+                        # Resample if necessary
+                        if source_sr != TARGET_STREAM_SAMPLE_RATE:
+                            import scipy.signal
+
+                            num_samples = int(
+                                len(audio_data) * TARGET_STREAM_SAMPLE_RATE / source_sr
+                            )
+                            audio_data = scipy.signal.resample(audio_data, num_samples)
+
+                        # Convert to int16
+                        audio_int16 = (audio_data * 32767).astype(np.int16)
+
+                        # Initialize start_index before the while loop
+                        start_index = 0
+                        chunk_count = 0  # Also initialize chunk_count
+
+                        while start_index < len(audio_int16):
+                            end_index = start_index + CHUNK_SAMPLES
+                            chunk = audio_int16[start_index:end_index]
+                            if len(chunk) == 0:
+                                break
+
+                            audio_bytes = chunk.tobytes()
+                            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+                            # Send chunk
+                            await voice_agent.send_chunk(sid=sid, audio_b64=audio_b64)
+                            chunk_count += 1
+                            start_index = end_index
                     continue  # No audio yet
 
-                elif event_type == "stop":
-                    logger.info(f"Call stopped for session {sid}: {data}")
-                    break  # End the loop
+                # elif event_type == "stop":
+                #     logger.info(f"Call stopped for session {sid}: {data}")
+                #     break  # End the loop
 
                 elif event_type == "media":
                     await receive_from_frontend(
