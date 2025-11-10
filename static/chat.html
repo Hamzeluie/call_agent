@@ -80,15 +80,33 @@
         let isStreaming = false;
         let currentResponse = '';
 
-        const getWebSocketUrls = (sessionId) => {
-            const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
-            const host = window.location.host;
-            const primaryUrl = `${ws_scheme}://${host}/messenger/ws/${sessionId}`;
-            const fallbackUrls = [
-                `${ws_scheme}://localhost:40331/messenger/ws/${sessionId}`,
-                `${ws_scheme}://localhost:6000/messenger/ws/${sessionId}`
-            ];
-            return [primaryUrl, ...fallbackUrls];
+        // Try different WebSocket URLs if the primary fails
+        const getWebSocketUrls = (userId, sessionId) => {
+            //const baseUrls = [
+                //`wss://${window.location.host}/messenger/ws/${userId}/${sessionId}`,
+                //`wss://${window.location.hostname}:40331/messenger/ws/${userId}/${sessionId}`,
+                //`wss://${window.location.hostname}:6000/messenger/ws/${userId}/${sessionId}`
+            //];
+            //return baseUrls;
+        // Dynamically determine the protocol (ws for http, wss for https)
+        const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
+        
+        // Use the current host (e.g., 'localhost:8000' or 'ols.vexu.ai')
+        const host = window.location.host;
+        
+        // Primary URL: Use the same scheme and host as the current page
+        const primaryUrl = `${ws_scheme}://${host}/messenger/ws/${userId}/${sessionId}`;
+        
+        // Fallback URLs (if needed for specific local setups)
+        const fallbackUrls = [
+            `${ws_scheme}://localhost:40331/messenger/ws/${userId}/${sessionId}`,
+            `${ws_scheme}://localhost:6000/messenger/ws/${userId}/${sessionId}`
+        ];
+        
+        return [primaryUrl, ...fallbackUrls];
+        
+        
+        
         };
 
         function showTypingIndicator() {
@@ -115,7 +133,11 @@
             console.log('Starting session initialization...');
             try {
                 responseText.textContent = 'Initializing session...';
-                const endpoints = [`${window.location.origin}/messenger/chat/init`, 'http://localhost:40331/messenger/chat/init'];
+                
+                // Try multiple endpoints for session initialization
+                const endpoints = [`${window.location.origin}/messenger/chat/init`,'http://localhost:40331/messenger/chat/init'];
+                // const endpoints = ['/messenger/chat/init','http://localhost:40331/messenger/chat/init'];
+                
                 let initResponse = null;
                 let lastError = null;
 

@@ -88,21 +88,72 @@ class RedisQueueManager(AbstractQueueManagerClient):
         raw = await self.redis_client.hget(self.active_sessions_key, sid)
         if raw is None:
             return None
-        return AgentSessions.from_json(raw)
 
-    async def cleanup_stopped_sessions(self):
-        """Remove all sessions with status 'stop' from active_sessions."""
-        sessions = await self.redis_client.hgetall(self.active_sessions_key)
-        for sid, raw_status in sessions.items():
-            try:
-                status_obj = AgentSessions.from_json(raw_status)
-                if status_obj.status == SessionStatus.STOP or status_obj.is_expired():
-                    await self.stop_session(status_obj.sid)
-            except Exception as e:
-                logger.warning(f"Failed to parse session {sid}: {e}")
+    async def connect_servers(self):
+        """Connect to WebSocket servers"""
+        try:
+            # Get session ID synchronously
+            self.session_id = self.get_session_id_sync()
+            # Create URIs for different services
+            self.vad_uri = f"ws://{self.yaml_config['vad']['host']}:{self.yaml_config['vad']['port']}/ws/vad"
+            self.stt_uri = f"ws://{self.yaml_config['stt']['host']}:{self.yaml_config['stt']['port']}/ws/stt"
+            self.rag_uri = f"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/search/{self.owner_id}"
+            self.tts_uri = f"ws://{self.yaml_config['tts']['host']}:{self.yaml_config['tts']['port']}"
+            headers = {"api-key": self.yaml_config["API_KEY"]}
+            self.llm_uri = (
+                f"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/ws/llm/{self.owner_id}/{self.session_id}"
+                if self.session_id
+                else None
+            )
+            print(f"Connecting to servers")
+            self.websockets["vad"] = await websockets.connect(
+                self.vad_uri, ping_interval=None
+            )
+            print(f"Connected to servers VAD")
+            self.websockets["stt"] = await websockets.connect(
+                self.stt_uri, ping_interval=None
+            )
+            print(f"Connected to servers STT")
+            self.websockets["rag"] = await websockets.connect(
+                self.rag_uri, ping_interval=None, extra_headers=headers
+            )
+            print(f"Connected to servers RAG")
+            if self.session_id:
+                self.websockets["llm"] = await websockets.connect(
+                    self.llm_uri, ping_interval=None
+                )
+                print(f"Connected to servers LLM")
+            else:
+                logger.error("Cannot connect to LLM server: No session_id available")
 
-    async def cleanup_interrupt_sessions(self):
-        """clean all queue with status 'interrupt'."""
+            self.websockets["tts"] = await websockets.connect(
+                self.tts_uri, ping_interval=None
+            )
+            print(f"Connected to servers TTS")
+            self.connected = True
+            logger.info("✅ Connected to servers")
+        except Exception as e:
+            logger.error(f"Failed to connect to servers: {e}")
+            raise
+
+    async def send_audio_chunk(self, audio_b64):
+        """Send a single audio chunk to the VAD server"""
+        if not self.connected or "vad" not in self.websockets:
+            raise Exception("VAD WebSocket not connected")
+        try:
+            request = {"type": "input_audio_buffer.append", "audio": audio_b64}
+            await self.websockets["vad"].send(json.dumps(request))
+        except websockets.exceptions.ConnectionClosed:
+            self.connected = False
+            raise
+        except Exception as e:
+            logger.error(f"Error sending audio chunk to VAD: {e}")
+            raise
+
+    async def send_to_stt(self):
+        """Send audio chunk to the STT server"""
+        if not self.connected or "stt" not in self.websockets:
+            raise Exception("STT WebSocket not connected")
         try:
             sessions = await self.redis_client.hgetall(self.active_sessions_key)
             for sid, raw_status in sessions.items():

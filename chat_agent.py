@@ -41,45 +41,58 @@ class RedisQueueManager(AbstractQueueManagerClient):
         redis_url: str = "redis://localhost:6379",
         timeout: float = 30.0,
     ):
-        self.redis_url = redis_url
-        self.agent_type = agent_type
-        self.service_names = service_names
-        self.channels_steps = channels_steps
-        self.input_channel = input_channel
-        self.output_channel = output_channel
-        self.timeout = timeout
-        self.redis_client = None
-        self.pubsub = None
-        self.active_sessions_key = f"{self.agent_type}:active_sessions"
+        # Load YAML configuration
+        self.yaml_config = yaml.safe_load(open(yaml_path, "r"))
+        self.owner_id = owner_id
+        self.kb_id = kb_id
+        self.limit = limit
+        self.system_prompt = system_prompt
+        self.config = config
 
-    async def initialize(self):
-        """Initialize Redis connection"""
-        self.redis_client = await redis.from_url(self.redis_url, decode_responses=False)
-        self.pubsub = self.redis_client.pubsub()
-        await self.pubsub.subscribe(self.output_channel)
-        logger.info(f"Redis queue manager initialized for queue")
+        self.websockets = {}
+        self.connected = False
+        self.context = ""
+        self.receiver_tasks = []
+        self.last_message = ""
+        self.streaming = False
+        self.current_stream_queue = asyncio.Queue()
+        self.response_event = asyncio.Event()  # Add event for synchronization
 
-    async def start_session(self, sid: str, agent_id: str, owner_id: str):
-        """Mark a session as active"""
-        await self.stop_session(sid)
-        agent_session = AgentSessions(
-            sid=sid,
-            agent_type=self.agent_type,
-            agent_id=agent_id,
-            service_names=self.service_names,
-            channels_steps=self.channels_steps,
-            owner_id=owner_id,
-            status=SessionStatus.ACTIVE,
-            first_channel=self.input_channel,
-            last_channel=self.output_channel,
-            timeout=self.timeout,
-        )
-        await self.redis_client.hset(
-            self.active_sessions_key, sid, agent_session.to_json()
+        # Create URIs
+        self.rag_uri = f"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/search/{self.owner_id}"
+        self.llm_config_uri = f"http://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/configure"
+
+        # Get session ID
+        self.session_id = self.get_session_id_sync()
+        self.llm_uri = (
+            f"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/ws/llm/{self.owner_id}/{self.session_id}"
+            if self.session_id
+            else None
         )
         logger.info(f"Session {sid} started")
 
-    async def get_status_object(self, sid: str) -> AgentSessions:
+        print(f"RAG URI: {self.rag_uri}")
+        print(f"LLM URI: {self.llm_uri}")
+        print(f"Session ID: {self.session_id}")
+        print(f"llm_config_uri : {self.llm_config_uri}")
+
+    def get_session_id_sync(self):
+        """Generate session ID synchronously"""
+        session_config = {
+            "kb_id": self.kb_id[0] if self.kb_id else "",
+            "owner_id": self.owner_id,
+            "config": self.config,
+            "system_prompt": self.system_prompt,
+        }
+        try:
+            response = requests.post(
+                self.llm_config_uri, json=session_config, timeout=10
+            )
+            response.raise_for_status()
+            return response.json().get("session_id")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to configure session: {e}")
+            return None
 
         raw = await self.redis_client.hget(self.active_sessions_key, sid)
         if raw is None:
@@ -101,10 +114,31 @@ class RedisQueueManager(AbstractQueueManagerClient):
     async def cleanup_interrupt_sessions(self):
         """clean all queue with status 'interrupt'."""
         try:
-            sessions = await self.redis_client.hgetall(self.active_sessions_key)
-            for sid, raw_status in sessions.items():
-                status_obj = AgentSessions.from_json(raw_status)
-                await self.cleanup_session_requests(status_obj)
+            try:
+                headers = {"api-key": self.yaml_config["API_KEY"]}
+                self.websockets["rag"] = await websockets.connect(
+                    self.rag_uri, ping_interval=None, extra_headers=headers
+                )
+                print("✅ Connected to KB server")
+            except Exception as e:
+                logger.error(f"Failed to connect to RAG server: {e}")
+                raise
+            
+            try:
+                if self.session_id:
+                    self.websockets["llm"] = await websockets.connect(
+                        self.llm_uri, ping_interval=None
+                    )
+                    print("✅ Connected to LLM server")
+                else:
+                    raise Exception("No session_id available")
+            except Exception as e:
+                logger.error(f"Failed to connect to LLM server: {e}")
+                raise
+
+            self.connected = True
+            logger.info("✅ Connected to servers")
+            await self.start_receivers()
         except Exception as e:
             logger.warning(f"Failed to interrupt session {sid}: {e}")
 
