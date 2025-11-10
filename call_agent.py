@@ -102,13 +102,13 @@ class CallAgent:
             # Get session ID synchronously
             self.session_id = self.get_session_id_sync()
             # Create URIs for different services
-            self.vad_uri = f"ws://{self.yaml_config['vad']['host']}:{self.yaml_config['vad']['port']}/{self.yaml_config['vad']['version']}/{self.yaml_config['vad']['endpoint']}"
-            self.stt_uri = f"ws://{self.yaml_config['stt']['host']}:{self.yaml_config['stt']['port']}/{self.yaml_config['stt']['version']}/{self.yaml_config['stt']['endpoint']}"
-            self.rag_uri = f"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/{self.yaml_config['db']['endpoint']}/search/{self.owner_id}"
+            self.vad_uri = f"ws://{self.yaml_config['vad']['host']}:{self.yaml_config['vad']['port']}/ws/vad"
+            self.stt_uri = f"ws://{self.yaml_config['stt']['host']}:{self.yaml_config['stt']['port']}/ws/stt"
+            self.rag_uri = f"ws://{self.yaml_config['db']['host']}:{self.yaml_config['db']['port']}/ws/search/{self.owner_id}"
             self.tts_uri = f"ws://{self.yaml_config['tts']['host']}:{self.yaml_config['tts']['port']}"
             headers = {"api-key": self.yaml_config["API_KEY"]}
             self.llm_uri = (
-                f"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/{self.yaml_config['llm']['version']}/{self.yaml_config['llm']['endpoint']}/{self.owner_id}/{self.session_id}"
+                f"ws://{self.yaml_config['llm']['host']}:{self.yaml_config['llm']['port']}/ws/llm/{self.owner_id}/{self.session_id}"
                 if self.session_id
                 else None
             )

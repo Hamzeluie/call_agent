@@ -1,0 +1,32 @@
+API_KEY: "test"
+vad:
+  host: "localhost"
+  port: 6001
+  sample_rate: 16000
+
+stt:
+  host: "localhost"
+  port: 6002
+
+db:
+  host: "localhost"
+  port: 6003
+
+llm:
+  host: "localhost"
+  port: 6004
+
+tts:
+  host: "localhost"
+  port: 6005
+
+call_development:
+  endpoint: "development"
+
+orchestrator:
+  # host: "0.0.0.0"
+  host: "localhost"
+  port: 6000
+  endpoint: "orchestrator"
+  chunk_duration: 40
+  sample_rate_ms: 8000
