@@ -177,8 +177,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
 
                 # Block indefinitely until an item is available
                 result = await temp_client.brpop(status_obj.last_channel, timeout=0)
-                print(f"✅brpop result: {result}")
-
+                print(f"result: {result}")
                 # BRPOP with timeout=0 blocks forever until an item arrives
                 if result is None:
                     # This should never happen with timeout=0, but included for safety
@@ -188,6 +187,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
 
                 try:
                     result_data = TextFeatures.from_json(raw_data)
+                    print(f"✅brpop result: {result_data.priority}")
                     if result_data.sid == sid:
                         yield result_data
                     # Optionally: log mismatched SID or re-queue if needed
@@ -282,6 +282,7 @@ class InferenceService(AbstractInferenceClient):
         if not await self.is_session_active(sid):
             raise Exception(f"Session is not active or has been stopped")
         first_service, priority = self.input_channel.split(":")
+        print("priority:", priority)
         input_request = TextFeatures(
             sid=sid,
             agent_type=self.agent_type,
