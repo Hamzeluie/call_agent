@@ -10,3 +10,4 @@
 output_tts.wav
 *generated_audio*
 actions-runner/
+*.csv
