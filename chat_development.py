@@ -3,7 +3,6 @@ import json
 from typing import Dict, List
 from uuid import uuid4
 
-from agent_architect.datatype_abstraction import TextFeatures
 from chat_agent import InferenceService
 from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from logging_config import get_logger
 from pydantic import BaseModel
 from utils import get_env_variable
+
+from agent_architect.datatype_abstraction import TextFeatures
 
 # Initialize the logger for this module
 logger = get_logger(__name__)
@@ -154,9 +155,11 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
 
             try:
                 response = []
+                print("*> SENDING CHUNK", user_message)
                 await chat_agent.send_chunk(sid=sid, input_data=user_message)
 
                 async for chunk in chat_agent.predict(sid):
+                    print("*> RECEIVED CHUNK", chunk.text, chunk.is_final)
                     response.append(chunk.text)
                     await websocket.send_text(
                         json.dumps({"type": "chunk", "content": chunk.text})
@@ -165,6 +168,7 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
                         print("*> BREAK")
                         break
 
+                print("*> COMPLETE", "".join(response))
                 await websocket.send_text(
                     json.dumps({"type": "complete", "message": "".join(response)})
                 )

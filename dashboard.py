@@ -79,9 +79,10 @@ async def create_document(
     client: httpx.AsyncClient = Depends(get_knowledge_base_client),
 ):
     try:
+        print
         json_str = json.dumps(doc_input.document)
         response = await client.post(
-            f"/knowledge_base/{owner_id}",
+            f"/{yaml_config['db']['endpoint']}/{owner_id}",
             json={
                 "owner_id": doc_input.owner_id,
                 "kb_id": doc_input.kb_id,
@@ -95,11 +96,13 @@ async def create_document(
         logging.error(f"HTTP {e.response.status_code}: {e.response.text}")
         raise HTTPException(
             status_code=e.response.status_code,
-            detail=f"local_omni error: {e.response.text}",
+            detail=f"knowledge base error: {e.response.text}",
         )
     except Exception as e:
         logging.error(f"Connect failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to connect to local_omni")
+        raise HTTPException(
+            status_code=500, detail="Failed to connect to knowledge base"
+        )
 
 
 @router.post("/knowledge_base/search/{owner_id}", response_model=SearchResponse)
@@ -128,7 +131,7 @@ async def search_documents(
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to connect to local_omni: {str(e)}"
+            status_code=500, detail=f"Failed to connect to knowledge base: {str(e)}"
         )
 
 
@@ -145,7 +148,7 @@ async def delete_documents(
     """
     try:
         response = await client.delete(
-            f"/knowledge_base/{owner_id}/{kb_id}",  # Match vector_db route
+            f"/{yaml_config['db']['endpoint']}/{owner_id}/{kb_id}",  # Match vector_db route
             headers={"api-key": api_key},  # ✅ Forward the API key!
         )
         response.raise_for_status()
@@ -157,7 +160,7 @@ async def delete_documents(
         )
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to connect to local_omni: {str(e)}"
+            status_code=500, detail=f"Failed to connect to knowledge base: {str(e)}"
         )
 
 

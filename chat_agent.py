@@ -6,6 +6,7 @@ import time
 from typing import Any, AsyncGenerator, Dict, List
 
 import redis.asyncio as redis
+
 from agent_architect.datatype_abstraction import TextFeatures
 from agent_architect.models_abstraction import (
     AbstractInferenceClient,
@@ -176,8 +177,13 @@ class RedisQueueManager(AbstractQueueManagerClient):
                     raise Exception(f"Session {sid} was stopped during processing")
 
                 # Block indefinitely until an item is available
-                result = await temp_client.brpop(status_obj.last_channel, timeout=0)
-                print(f"result: {result}")
+                result = await temp_client.brpop(
+                    status_obj.last_channel + f":{sid}", timeout=0
+                )
+                print(
+                    f"result: {result}, channel name:",
+                    status_obj.last_channel + f":{sid}",
+                )
                 # BRPOP with timeout=0 blocks forever until an item arrives
                 if result is None:
                     # This should never happen with timeout=0, but included for safety
@@ -189,6 +195,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
                     result_data = TextFeatures.from_json(raw_data)
                     print(f"✅brpop result: {result_data.priority}")
                     if result_data.sid == sid:
+                        print(f"✅✅ yield result for sid: {sid}-{result_data.text}")
                         yield result_data
                     # Optionally: log mismatched SID or re-queue if needed
                 except (json.JSONDecodeError, TypeError) as e:

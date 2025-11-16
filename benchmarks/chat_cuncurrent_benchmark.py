@@ -24,10 +24,14 @@ class HighConcurrencyBenchmark:
         base_url: str = "http://localhost:8000",
         ws_base_url: str = "ws://localhost:8000",
         max_concurrent: int = 10,
+        acceptable_time_threshold: float = 2.0,  # New parameter: acceptable response time in seconds
     ):
         self.base_url = base_url.rstrip("/")
         self.ws_base_url = ws_base_url.rstrip("/")
         self.max_concurrent = max_concurrent
+        self.acceptable_time_threshold = (
+            acceptable_time_threshold  # Store the threshold
+        )
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.results = []
         self.session_ids = []
@@ -73,6 +77,7 @@ class HighConcurrencyBenchmark:
             "total_time": 0,
             "status": "success",
             "error_message": None,
+            "within_acceptable_time": False,  # New metric: whether response was within acceptable threshold
         }
 
         try:
@@ -97,16 +102,31 @@ class HighConcurrencyBenchmark:
                         )
                         data = json.loads(response)
                         current_time = time.time()
+                        # print("-" * 10)
+                        # print("session id: ", session_id)
+                        # print("message: ", message)
+                        # print(data["type"], data)
 
                         if data["type"] == "chunk":
                             token_count += 1
                             if first_token_time is None:
                                 first_token_time = current_time
                                 metrics["ttft"] = current_time - start_time
+                                # Check if first token arrived within acceptable time
+                                metrics["within_acceptable_time"] = (
+                                    metrics["ttft"] <= self.acceptable_time_threshold
+                                )
 
                         elif data["type"] == "complete":
                             metrics["total_time"] = current_time - start_time
                             metrics["total_tokens"] = token_count
+                            # If no chunks were received but completion happened, check total time
+                            if (
+                                first_token_time is None
+                                and metrics["total_time"]
+                                <= self.acceptable_time_threshold
+                            ):
+                                metrics["within_acceptable_time"] = True
                             break
 
                         elif data["type"] in ["error", "timeout"]:
@@ -176,10 +196,19 @@ class HighConcurrencyBenchmark:
             if isinstance(r, Exception) or r.get("status") != "success"
         ]
 
-        logging.info(
-            f"Stress test completed: {len(successful)} successful, {len(failed)} failed"
+        # Calculate goodput metrics
+        acceptable_responses = [
+            r for r in successful if r.get("within_acceptable_time", False)
+        ]
+        goodput_percentage = (
+            (len(acceptable_responses) / num_users * 100) if num_users > 0 else 0
         )
-        return successful, failed
+
+        logging.info(
+            f"Stress test completed: {len(successful)} successful, {len(failed)} failed, "
+            f"{len(acceptable_responses)} within acceptable time ({goodput_percentage:.1f}% goodput)"
+        )
+        return successful, failed, acceptable_responses, goodput_percentage
 
     async def run_scalability_test(self, max_users: int = 20, step: int = 2):
         """Test scalability by gradually increasing concurrent users"""
@@ -189,8 +218,10 @@ class HighConcurrencyBenchmark:
             logger.info(f"Testing with {num_users} concurrent users...")
 
             start_time = time.time()
-            successful, failed = await self.stress_test_concurrent_users(
-                num_users=num_users, message="Hello, how are you?"
+            successful, failed, acceptable_responses, goodput_percentage = (
+                await self.stress_test_concurrent_users(
+                    num_users=num_users, message="Hello, how are you?"
+                )
             )
             end_time = time.time()
 
@@ -199,6 +230,8 @@ class HighConcurrencyBenchmark:
                 "successful_requests": len(successful),
                 "failed_requests": len(failed),
                 "success_rate": len(successful) / num_users * 100,
+                "acceptable_responses": len(acceptable_responses),  # New metric
+                "goodput_percentage": goodput_percentage,  # New metric: percentage of acceptable responses
                 "total_time": end_time - start_time,
                 "requests_per_second": (
                     len(successful) / (end_time - start_time)
@@ -216,15 +249,29 @@ class HighConcurrencyBenchmark:
                     metrics["std_ttft"] = (
                         statistics.stdev(ttft_values) if len(ttft_values) > 1 else 0
                     )
+
+                    # Calculate percentage of responses within acceptable threshold
+                    within_threshold = [
+                        ttft
+                        for ttft in ttft_values
+                        if ttft <= self.acceptable_time_threshold
+                    ]
+                    metrics["ttft_within_threshold"] = len(within_threshold)
+                    metrics["ttft_within_threshold_percentage"] = (
+                        len(within_threshold) / len(ttft_values) * 100
+                    )
                 else:
                     metrics["avg_ttft"] = 0
                     metrics["min_ttft"] = 0
                     metrics["max_ttft"] = 0
                     metrics["std_ttft"] = 0
+                    metrics["ttft_within_threshold"] = 0
+                    metrics["ttft_within_threshold_percentage"] = 0
 
             scalability_results.append(metrics)
             logger.info(
-                f"Concurrent Users: {num_users}, Success Rate: {metrics['success_rate']:.1f}%, Avg TTFT: {metrics.get('avg_ttft', 0):.3f}s"
+                f"Concurrent Users: {num_users}, Success Rate: {metrics['success_rate']:.1f}%, "
+                f"Goodput: {metrics['goodput_percentage']:.1f}%, Avg TTFT: {metrics.get('avg_ttft', 0):.3f}s"
             )
 
             # Wait between scalability steps
@@ -261,11 +308,16 @@ class HighConcurrencyBenchmark:
             for r in results
             if not isinstance(r, Exception) and r.get("status") == "success"
         ]
+        acceptable_responses = [
+            r for r in successful if r.get("within_acceptable_time", False)
+        ]
 
         return {
             "total_users": concurrent_users,
             "successful": len(successful),
             "success_rate": len(successful) / concurrent_users * 100,
+            "acceptable_responses": len(acceptable_responses),
+            "goodput_percentage": len(acceptable_responses) / concurrent_users * 100,
             "avg_ttft": (
                 statistics.mean([r["ttft"] for r in successful if r.get("ttft")])
                 if successful
@@ -291,22 +343,30 @@ class HighConcurrencyBenchmark:
             logger.info(f"Cleaned up {len(cleanup_tasks)} sessions")
 
 
-async def run_high_concurrency_test():
-    benchmark = HighConcurrencyBenchmark(max_concurrent=10)
+async def run_high_concurrency_test(
+    max_cuncurrent: int = 10, run_heavy=False, acceptable_time_threshold=2.0
+):
+    benchmark = HighConcurrencyBenchmark(
+        max_concurrent=max_cuncurrent,
+        acceptable_time_threshold=acceptable_time_threshold,
+    )
 
     try:
         print("🚀 Starting High Concurrency Benchmark")
+        print(f"📊 Acceptable Time Threshold: {acceptable_time_threshold}s")
         print("=" * 60)
 
         # Test 1: Scalability test
         print("\n📈 Running Scalability Test...")
-        scalability_results = await benchmark.run_scalability_test(max_users=15, step=3)
+        scalability_results = await benchmark.run_scalability_test(
+            max_users=max_cuncurrent, step=3
+        )
 
         print("\n" + "=" * 60)
         print("SCALABILITY TEST RESULTS")
         print("=" * 60)
         print(
-            f"{'Users':>6} {'Success':>8} {'RPS':>8} {'Avg TTFT':>10} {'Min TTFT':>10} {'Max TTFT':>10}"
+            f"{'Users':>6} {'Success':>8} {'Goodput':>8} {'RPS':>8} {'Avg TTFT':>10} {'Acceptable':>12}"
         )
         print("-" * 60)
 
@@ -314,61 +374,95 @@ async def run_high_concurrency_test():
             print(
                 f"{result['concurrent_users']:6d} | "
                 f"{result['success_rate']:7.1f}% | "
+                f"{result['goodput_percentage']:7.1f}% | "
                 f"{result['requests_per_second']:7.2f} | "
                 f"{result.get('avg_ttft', 0):8.3f}s | "
-                f"{result.get('min_ttft', 0):8.3f}s | "
-                f"{result.get('max_ttft', 0):8.3f}s"
+                f"{result.get('ttft_within_threshold_percentage', 0):10.1f}%"
             )
 
-        # Find the breaking point
-        breaking_point = None
+        # Find the breaking point for success rate
+        breaking_point_success = None
         for result in scalability_results:
             if result["success_rate"] < 80:  # Below 80% success rate
-                breaking_point = result["concurrent_users"]
+                breaking_point_success = result["concurrent_users"]
                 break
 
-        if breaking_point:
-            print(f"\n🚨 SYSTEM BREAKING POINT: {breaking_point} concurrent users")
+        # Find the breaking point for goodput (acceptable performance)
+        breaking_point_goodput = None
+        for result in scalability_results:
+            if result["goodput_percentage"] < 80:  # Below 80% goodput
+                breaking_point_goodput = result["concurrent_users"]
+                break
+
+        if breaking_point_success:
+            print(
+                f"\n🚨 SYSTEM BREAKING POINT (Success): {breaking_point_success} concurrent users"
+            )
         else:
             print(
                 f"\n✅ System handles up to {scalability_results[-1]['concurrent_users']} users successfully"
             )
 
+        if breaking_point_goodput:
+            print(
+                f"🚨 PERFORMANCE BREAKING POINT (Goodput): {breaking_point_goodput} concurrent users"
+            )
+        else:
+            max_goodput_users = scalability_results[-1]["concurrent_users"]
+            final_goodput = scalability_results[-1]["goodput_percentage"]
+            print(
+                f"✅ Goodput remains at {final_goodput:.1f}% up to {max_goodput_users} users"
+            )
+
         # Test 2: Heavy message test
-        print("\n🔧 Running Heavy Message Test...")
-        heavy_results = await benchmark.run_heavy_message_test(concurrent_users=5)
-        print(f"Heavy Message Test Results:")
-        print(f"  Users: {heavy_results['total_users']}")
-        print(f"  Success Rate: {heavy_results['success_rate']:.1f}%")
-        print(f"  Avg TTFT: {heavy_results['avg_ttft']:.3f}s")
+        if run_heavy:
+            print("\n🔧 Running Heavy Message Test...")
+            heavy_results = await benchmark.run_heavy_message_test(
+                concurrent_users=max_cuncurrent
+            )
+            print(f"Heavy Message Test Results:")
+            print(f"  Users: {heavy_results['total_users']}")
+            print(f"  Success Rate: {heavy_results['success_rate']:.1f}%")
+            print(f"  Goodput: {heavy_results['goodput_percentage']:.1f}%")
+            print(f"  Avg TTFT: {heavy_results['avg_ttft']:.3f}s")
 
-        # Generate summary report
-        print("\n" + "=" * 60)
-        print("SUMMARY REPORT")
-        print("=" * 60)
+            # Generate summary report
+            print("\n" + "=" * 60)
+            print("SUMMARY REPORT")
+            print("=" * 60)
 
-        total_tests = (
-            sum(r["concurrent_users"] for r in scalability_results)
-            + heavy_results["total_users"]
-        )
-        total_success = (
-            sum(r["successful_requests"] for r in scalability_results)
-            + heavy_results["successful"]
-        )
+            total_tests = (
+                sum(r["concurrent_users"] for r in scalability_results)
+                + heavy_results["total_users"]
+            )
+            total_success = (
+                sum(r["successful_requests"] for r in scalability_results)
+                + heavy_results["successful"]
+            )
+            total_acceptable = (
+                sum(r["acceptable_responses"] for r in scalability_results)
+                + heavy_results["acceptable_responses"]
+            )
 
-        print(f"Total Tests Run: {total_tests}")
-        print(f"Total Successful: {total_success}")
-        print(f"Overall Success Rate: {total_success/total_tests*100:.1f}%")
+            print(f"Total Tests Run: {total_tests}")
+            print(f"Total Successful: {total_success}")
+            print(f"Total Acceptable Responses: {total_acceptable}")
+            print(f"Overall Success Rate: {total_success/total_tests*100:.1f}%")
+            print(f"Overall Goodput Rate: {total_acceptable/total_tests*100:.1f}%")
 
-        # Performance recommendations
-        max_stable_users = (
-            breaking_point - 3
-            if breaking_point
-            else scalability_results[-1]["concurrent_users"]
-        )
-        print(
-            f"\n💡 RECOMMENDATION: Limit to {max_stable_users} concurrent users for stable performance"
-        )
+            # Performance recommendations
+            max_stable_users = (
+                breaking_point_goodput - 3
+                if breaking_point_goodput
+                else (
+                    breaking_point_success - 3
+                    if breaking_point_success
+                    else scalability_results[-1]["concurrent_users"]
+                )
+            )
+            print(
+                f"\n💡 RECOMMENDATION: Limit to {max_stable_users} concurrent users for acceptable performance"
+            )
 
     except Exception as e:
         logger.error(f"Benchmark failed: {e}")
@@ -376,25 +470,43 @@ async def run_high_concurrency_test():
         await benchmark.cleanup()
 
 
-async def quick_concurrency_test():
+async def quick_concurrency_test(
+    max_cuncurrent: int = 10, acceptable_time_threshold=2.0
+):
     """Quick test to check basic concurrency"""
-    benchmark = HighConcurrencyBenchmark(max_concurrent=5)
+    benchmark = HighConcurrencyBenchmark(
+        max_concurrent=max_cuncurrent,
+        acceptable_time_threshold=acceptable_time_threshold,
+    )
 
     try:
-        print("🚀 Quick Concurrency Test (5 users)")
-        successful, failed = await benchmark.stress_test_concurrent_users(
-            num_users=5, message="Hello, quick test!"
+        print(
+            f"🚀 Quick Concurrency Test (5 users, threshold: {acceptable_time_threshold}s)"
+        )
+        successful, failed, acceptable_responses, goodput_percentage = (
+            await benchmark.stress_test_concurrent_users(
+                num_users=max_cuncurrent, message="Hello, quick test!"
+            )
         )
 
         print(f"✅ Successful: {len(successful)}")
+        print(
+            f"✅ Acceptable Responses: {len(acceptable_responses)} ({goodput_percentage:.1f}% goodput)"
+        )
         print(f"❌ Failed: {len(failed)}")
 
         if successful:
             ttft_values = [r["ttft"] for r in successful if r.get("ttft")]
             if ttft_values:
+                acceptable_ttft = [
+                    ttft for ttft in ttft_values if ttft <= acceptable_time_threshold
+                ]
                 print(
                     f"📊 TTFT - Avg: {statistics.mean(ttft_values):.3f}s, "
                     f"Min: {min(ttft_values):.3f}s, Max: {max(ttft_values):.3f}s"
+                )
+                print(
+                    f"📊 Goodput - {len(acceptable_ttft)}/{len(ttft_values)} within {acceptable_time_threshold}s threshold"
                 )
 
     finally:
@@ -402,8 +514,15 @@ async def quick_concurrency_test():
 
 
 if __name__ == "__main__":
+    # You can adjust the acceptable time threshold here
+    ACCEPTABLE_TIME_THRESHOLD = 1.0  # seconds
+
     # Run quick test first to verify everything works
-    # asyncio.run(quick_concurrency_test())
+    # asyncio.run(quick_concurrency_test(ACCEPTABLE_TIME_THRESHOLD))
 
     # Then run full benchmark
-    asyncio.run(run_high_concurrency_test())
+    asyncio.run(
+        run_high_concurrency_test(
+            max_cuncurrent=50, acceptable_time_threshold=ACCEPTABLE_TIME_THRESHOLD
+        )
+    )
