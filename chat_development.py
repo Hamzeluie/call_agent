@@ -108,6 +108,7 @@ async def init_chat(request: ChatInitRequest):
     """
     try:
         sid = f"{request.owner_id}:{request.agent_id}:{request.user_id}:{str(uuid4().hex)}"
+        print("SID =>", sid)
         await chat_agent.start_session(
             sid=sid, agent_id=request.agent_id, owner_id=request.owner_id
         )
@@ -155,20 +156,15 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
 
             try:
                 response = []
-                print("*> SENDING CHUNK", user_message)
                 await chat_agent.send_chunk(sid=sid, input_data=user_message)
 
                 async for chunk in chat_agent.predict(sid):
-                    print("*> RECEIVED CHUNK", chunk.text, chunk.is_final)
                     response.append(chunk.text)
                     await websocket.send_text(
                         json.dumps({"type": "chunk", "content": chunk.text})
                     )
                     if chunk.is_final:
-                        print("*> BREAK")
                         break
-
-                print("*> COMPLETE", "".join(response))
                 await websocket.send_text(
                     json.dumps({"type": "complete", "message": "".join(response)})
                 )

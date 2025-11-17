@@ -114,6 +114,10 @@ class MemoryHistoryBenchmark:
                             response_chunks.append(data["content"])
 
                         elif data["type"] == "complete":
+                            user_message = turn['user']
+                            print(
+                                f"question is : {user_message} and response is:{data}"
+                            )
                             turn_metrics["response_time"] = time.time() - start_time
                             full_response = "".join(response_chunks)
 

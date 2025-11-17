@@ -59,9 +59,9 @@ MESSAGE_ENDPOINT = get_env_variable("ENDPOINT_MESSAGE")
 class CallRequest(BaseModel):
     # called: str = "+12345952496"  # owner number
     # from_number: str = "+201140099226"  # user number
-    owner_id: str = "+12345952496"  # owner number
+    owner_id: str = "5"  # owner number
     user_id: str = "+201140099226"  # user number
-    agent_id: str = "AGENT_1"
+    agent_id: str = "1"
 
 
 class CallSession:
@@ -450,7 +450,9 @@ async def forward_twilio_to_client(session: CallSession):
                 # END MODIFICATION
 
             elif data["event"] == "clear":
-                print(f"Forwarding 'clear' event for streamSid: {data.get('streamSid')}")
+                print(
+                    f"Forwarding 'clear' event for streamSid: {data.get('streamSid')}"
+                )
                 await session.client_ws.send_json({"type": "clear_audio"})
 
             elif data["event"] == "stop":

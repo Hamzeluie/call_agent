@@ -116,6 +116,17 @@ class RedisQueueManager(AbstractQueueManagerClient):
         deleted_count = await self.redis_client.hdel(self.active_sessions_key, sid)
         if deleted_count > 0:
             await self.cleanup_session_requests(status_obj)
+            output_queue = self.output_channel + f":{sid}"
+
+            deleted = await self.redis_client.delete(output_queue)
+
+            if deleted:
+                logger.info(f"Deleted output queue: {output_queue}")
+            else:
+                logger.info(
+                    f"Output queue {output_queue} was already empty or non-existent"
+                )
+
             logger.info(f"Session {sid} stopped (deleted from Redis)")
         else:
             logger.warning(
@@ -177,14 +188,11 @@ class RedisQueueManager(AbstractQueueManagerClient):
                     raise Exception(f"Session {sid} was stopped during processing")
 
                 # Block indefinitely until an item is available
-                result = await temp_client.brpop(
-                    status_obj.last_channel + f":{sid}", timeout=0
-                )
-                print(
-                    f"result: {result}, channel name:",
-                    status_obj.last_channel + f":{sid}",
-                )
-                # BRPOP with timeout=0 blocks forever until an item arrives
+
+                output_queue = status_obj.last_channel + f":{sid}"
+
+                result = await temp_client.brpop(output_queue, timeout=0)
+
                 if result is None:
                     # This should never happen with timeout=0, but included for safety
                     continue
@@ -193,9 +201,7 @@ class RedisQueueManager(AbstractQueueManagerClient):
 
                 try:
                     result_data = TextFeatures.from_json(raw_data)
-                    print(f"✅brpop result: {result_data.priority}")
                     if result_data.sid == sid:
-                        print(f"✅✅ yield result for sid: {sid}-{result_data.text}")
                         yield result_data
                     # Optionally: log mismatched SID or re-queue if needed
                 except (json.JSONDecodeError, TypeError) as e:
@@ -289,7 +295,6 @@ class InferenceService(AbstractInferenceClient):
         if not await self.is_session_active(sid):
             raise Exception(f"Session is not active or has been stopped")
         first_service, priority = self.input_channel.split(":")
-        print("priority:", priority)
         input_request = TextFeatures(
             sid=sid,
             agent_type=self.agent_type,

@@ -230,7 +230,8 @@
         
         <div class="form-group">
             <label for="owner_id">Called Number (To)</label>
-            <input type="text" id="owner_id" value="+12345952496" placeholder="+1234567890">
+            <!-- <input type="text" id="owner_id" value="+12345952496" placeholder="+1234567890"> -->
+            <input type="text" id="owner_id" value="5" placeholder="5">
         </div>
         
         <div class="form-group">
@@ -331,7 +332,8 @@
                     
                     const owner_id = document.getElementById('owner_id').value; //called
                     const user_id = document.getElementById('user_id').value; //fromNumber
-                    const agent_id = "AGENT_1"; // Static agent ID for testing
+                    // const agent_id = "AGENT_1"; // Static agent ID for testing
+                    const agent_id = "0";
                     // Initiate the call
                     const response = await fetch('/api/initiate-call', {
                         method: 'POST',
