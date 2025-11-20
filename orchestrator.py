@@ -60,7 +60,8 @@ class CallRequest(BaseModel):
     # called: str = "+12345952496"  # owner number
     # from_number: str = "+201140099226"  # user number
     owner_id: str = "5"  # owner number
-    user_id: str = "+201140099226"  # user number
+    # user_id: str = "+201140099226"  # user number
+    user_id: str = "USER_ID"
     agent_id: str = "1"
 
 
@@ -261,7 +262,7 @@ async def process_mark_acknowledgments(session: CallSession):
                 "mark": {"name": mark_name},
             }
 
-            if session.twilio_ws and not session.twilio_ws.closed:
+            if session.twilio_ws and not session.twilio_ws.close():
                 await session.twilio_ws.send(json.dumps(response_mark_event))
             else:
                 module_logger.warning(
@@ -402,7 +403,7 @@ async def forward_client_to_twilio(session: CallSession):
                 "sequenceNumber": str(sequence_number),
                 "streamSid": session.stream_sid,
             }
-            if session.twilio_ws and not session.twilio_ws.closed:
+            if session.twilio_ws and not session.twilio_ws.close():
                 try:
                     await session.twilio_ws.send(json.dumps(stop_event))
                     await session.twilio_ws.close()

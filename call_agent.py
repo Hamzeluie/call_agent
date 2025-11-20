@@ -1,9 +1,13 @@
 import asyncio
 import json
 import logging
+import wave
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
+import numpy as np
 import redis.asyncio as redis
+
 from agent_architect.datatype_abstraction import AudioFeatures
 from agent_architect.models_abstraction import (
     AbstractInferenceClient,
@@ -16,6 +20,18 @@ from agent_architect.utils import get_all_channels, go_next_service
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def save_wav(pcm_bytes: bytes, sample_rate: int, output_path: Path):
+    audio_np = np.frombuffer(pcm_bytes, dtype=np.float32)
+    audio_np = np.clip(audio_np, -1.0, 1.0)
+    audio_int16 = (audio_np * 32767).astype(np.int16)
+    with wave.open(str(output_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(audio_int16.tobytes())
+    logger.info(f"Saved {output_path}")
 
 
 def get_interrupted_channels(req: AgentSessions):
@@ -186,8 +202,9 @@ class RedisQueueManager(AbstractQueueManagerClient):
             last_channel=status_obj.last_channel,
             prioriry="input",
         )
+        print("=>**", next_service)
         await self.redis_client.lpush(next_service, request_data.to_json())
-        # logger.info(f"Request {sid} submitted to {next_service}")
+        logger.info(f"Request {sid} submitted to {next_service}")
 
     async def listen_for_result(self, sid: str) -> AsyncGenerator[AudioFeatures, None]:
         """
@@ -231,6 +248,18 @@ class RedisQueueManager(AbstractQueueManagerClient):
 
                 try:
                     result_data = AudioFeatures.from_json(raw_data)
+
+                    # Save audio file before processing
+                    print("💾 Saving audio file for session:", result_data.sid)
+                    # Save audio to directory (minimal version)
+                    audio_dir = Path("/home/ubuntu/borhan/whole_pipeline/vexu/outputs")
+                    audio_dir.mkdir(exist_ok=True)
+                    file_count = len(list(audio_dir.glob("audio_*.wav"))) + 1
+                    filename = f"audio_{file_count:06d}.wav"
+                    save_wav(result_data.audio, 24000, str(audio_dir / filename))
+                    logger.info(f"Audio saved as {filename}")
+                    print("💾 Saved audio file for session:", result_data.sid)
+
                     if result_data.sid == sid:
                         yield result_data
                     # Optionally: log mismatched SID or re-queue if needed
@@ -347,4 +376,5 @@ class InferenceService(AbstractInferenceClient):
             audio=audio_b64,  # base64 string
             sample_rate=16000,
         )
+        print("=>**submit_data_request", type(audio_b64))
         await self.queue_manager.submit_data_request(input_request, sid)

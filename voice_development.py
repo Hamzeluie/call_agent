@@ -9,8 +9,6 @@ from typing import Dict, List
 from uuid import uuid4
 
 import numpy as np
-from agent_architect.datatype_abstraction import TextFeatures
-from call_agent import InferenceService
 from fastapi import (
     APIRouter,
     FastAPI,
@@ -24,6 +22,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from logging_config import get_logger
 from pydantic import BaseModel
 from utils import get_env_variable
+
+from agent_architect.datatype_abstraction import TextFeatures
+from call_agent import InferenceService
 
 # Initialize the logger for this module
 logger = get_logger(__name__)
@@ -162,6 +163,8 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
 
                     # initialize call by passing a sound file contiane "hello"
                     file_path = "./who.wav"
+                    # file_path = "./marhaba.wav"
+
                     if os.path.exists(file_path):
                         print(f"Streaming audio from {file_path} to initialize call...")
 
@@ -222,10 +225,11 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
                                 break
 
                             audio_bytes = chunk.tobytes()
-                            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                            # audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
                             # Send chunk
-                            await voice_agent.send_chunk(sid=sid, audio_b64=audio_b64)
+                            # await voice_agent.send_chunk(sid=sid, audio_b64=audio_b64)
+                            await voice_agent.send_chunk(sid=sid, audio_b64=audio_bytes)
                             chunk_count += 1
                             start_index = end_index
                     continue  # No audio yet
@@ -263,7 +267,7 @@ async def websocket_endpoint(websocket: WebSocket, sid: str):
 
 
 async def receive_from_frontend(sid: str, data: dict):
-    # Safe: only called when event == "media"
+    # Safe: only called when event == "media"z
     media_payload = data["media"]["payload"]
     audio_bytes_ulaw = base64.b64decode(media_payload)
     pcm_audio = audioop.ulaw2lin(audio_bytes_ulaw, 2)
@@ -276,8 +280,10 @@ async def receive_from_frontend(sid: str, data: dict):
     # ) as f:
     #     f.write(pcm_audio)
 
-    pcm_payload = base64.b64encode(pcm_audio).decode("utf-8")
-    await voice_agent.send_chunk(sid, pcm_payload)
+    # pcm_payload = base64.b64encode(pcm_audio).decode("utf-8")
+    # await voice_agent.send_chunk(sid, pcm_payload)
+
+    await voice_agent.send_chunk(sid, pcm_audio)
 
 
 async def send_to_frontend(websocket: WebSocket, sid: str):
@@ -289,7 +295,8 @@ async def send_to_frontend(websocket: WebSocket, sid: str):
                     f"Interrupt detected in send_to_frontend for {sid}, dropping chunk"
                 )
 
-            float32_bytes = base64.b64decode(chunk.audio)
+            # float32_bytes = base64.b64decode(chunk.audio)
+            float32_bytes = chunk.audio
 
             if not float32_bytes:
                 continue
